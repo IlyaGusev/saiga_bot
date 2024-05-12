@@ -13,6 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest
 from openai import AsyncOpenAI
 from tinydb import TinyDB, where, Query
 from tinydb import operations as ops
@@ -271,7 +272,11 @@ class LlmBot:
                 text="👎",
                 callback_data="dislike"
             ))
-            message = await placeholder.edit_text(answer, reply_markup=builder.as_markup())
+            try:
+                message = await placeholder.edit_text(answer, reply_markup=builder.as_markup())
+            except TelegramBadRequest:
+                print("Fallback to HTML parser")
+                message = await placeholder.edit_text(answer, reply_markup=builder.as_markup(), parse_mode=ParseMode.HTML)
 
             self.messages_table.insert({
                 "role": "assistant",
