@@ -11,7 +11,7 @@ from aiogram import F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 from openai import AsyncOpenAI
@@ -70,7 +70,12 @@ class LlmBot:
         self.system_prompts_table = self.db.table("system_prompts")
         self.models_table = self.db.table("models")
         self.likes_table = self.db.table("likes")
-
+        
+        #Клавиатуры 
+        self.inline_models_list_kb = InlineKeyboardBuilder()
+        for model_id in self.clients.keys():
+            self.inline_models_list_kb.add(InlineKeyboardButton(text=model_id, callback_data=f"set_model:{model_id}"))
+        
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
@@ -86,6 +91,7 @@ class LlmBot:
         self.dp.message.register(self.generate)
         self.dp.callback_query.register(self.save_like, F.data == "like")
         self.dp.callback_query.register(self.save_like, F.data == "dislike")
+        self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith(f"set_model:"))
 
     async def start_polling(self):
         await self.dp.start_polling(self.bot)
@@ -203,7 +209,17 @@ class LlmBot:
             await message.reply(prompt)
         else:
             await message.reply("Системный промпт пуст")
-
+    
+    async def set_model_button_handler(self,callback: CallbackQuery):
+        user_id = callback.from_user.id
+        model_name = callback.data.split(":")[1]
+        if model_name in self.clients:
+            self.set_current_model(user_id, model_name)
+            self.create_conv_id(user_id)
+            await self.bot.send_message(chat_id=user_id,text=f"Новая модель задана:\n\n{model_name}")
+        else:
+            await self.bot.send_message(chat_id=user_id,text=f"Некорректное имя модели. Выберите из: {list(self.clients.keys())}")
+    
     async def set_model(self, message: Message):
         user_id = message.from_user.id
         model_name = message.text.replace("/set_model", "").strip()
@@ -218,9 +234,9 @@ class LlmBot:
         user_id = message.from_user.id
         model = self.get_current_model(user_id)
         await message.reply(model)
-
+        
     async def get_model_list(self, message: Message):
-        await message.reply(str(list(self.clients.keys())))
+        await message.reply("Выберите модель:", reply_markup=self.inline_models_list_kb.as_markup())
 
     async def reset_system(self, message: Message):
         user_id = message.from_user.id
