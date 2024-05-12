@@ -2,6 +2,7 @@ import asyncio
 import os
 import json
 import secrets
+import traceback
 from datetime import datetime, timezone
 
 import fire
@@ -70,7 +71,7 @@ class LlmBot:
         self.likes_table = self.db.table("likes")
 
         # Бот
-        self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
         self.dp.message.register(self.start, Command("start"))
         self.dp.message.register(self.reset, Command("reset"))
@@ -253,31 +254,38 @@ class LlmBot:
         })
         model = self.get_current_model(user_id)
         placeholder = await message.answer("💬")
-        answer = await self.query_api(
-            model=model,
-            history=history,
-            last_message=last_message,
-            system_prompt=system_prompt
-        )
-        builder = InlineKeyboardBuilder()
-        builder.add(InlineKeyboardButton(
-            text="👍",
-            callback_data="like"
-        ))
-        builder.add(InlineKeyboardButton(
-            text="👎",
-            callback_data="dislike"
-        ))
-        message = await placeholder.edit_text(answer, reply_markup=builder.as_markup())
-        self.messages_table.insert({
-            "role": "assistant",
-            "content": answer,
-            "conv_id": conv_id,
-            "timestamp": self.get_current_ts(),
-            "message_id": message.message_id,
-            "model": model,
-            "system_prompt": system_prompt
-        })
+
+        try:
+            answer = await self.query_api(
+                model=model,
+                history=history,
+                last_message=last_message,
+                system_prompt=system_prompt
+            )
+            builder = InlineKeyboardBuilder()
+            builder.add(InlineKeyboardButton(
+                text="👍",
+                callback_data="like"
+            ))
+            builder.add(InlineKeyboardButton(
+                text="👎",
+                callback_data="dislike"
+            ))
+            message = await placeholder.edit_text(answer, reply_markup=builder.as_markup())
+
+            self.messages_table.insert({
+                "role": "assistant",
+                "content": answer,
+                "conv_id": conv_id,
+                "timestamp": self.get_current_ts(),
+                "message_id": message.message_id,
+                "model": model,
+                "system_prompt": system_prompt
+            })
+        except Exception:
+            traceback.print_exc()
+            await placeholder.edit_text("Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться.")
+
 
     async def save_like(self, callback: CallbackQuery):
         user_id = callback.from_user.id
