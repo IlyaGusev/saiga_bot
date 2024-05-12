@@ -6,10 +6,12 @@ from datetime import datetime, timezone
 
 import fire
 from aiogram import Bot, Dispatcher
+from aiogram import F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
 from tinydb import TinyDB, where, Query
 from tinydb import operations as ops
@@ -56,6 +58,7 @@ class LlmBot:
         self.messages_table = self.db.table("messages")
         self.conversations_table = self.db.table("current_conversations")
         self.system_prompts_table = self.db.table("system_prompts")
+        self.likes_table = self.db.table("likes")
 
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -67,6 +70,8 @@ class LlmBot:
         self.dp.message.register(self.get_system, Command("get_system"))
         self.dp.message.register(self.reset_system, Command("reset_system"))
         self.dp.message.register(self.generate)
+        self.dp.callback_query.register(self.save_like, F.data == "like")
+        self.dp.callback_query.register(self.save_like, F.data == "dislike")
 
     async def start_polling(self):
         await self.dp.start_polling(self.bot)
@@ -200,18 +205,57 @@ class LlmBot:
             "timestamp": self.get_current_ts()
         })
         system_prompt = self.get_system_prompt(user_id)
+        placeholder = await message.answer("💬")
         answer = await self.query_api(
             history=history,
             last_message=last_message,
             system_prompt=system_prompt
         )
+        builder = InlineKeyboardBuilder()
+        builder.add(InlineKeyboardButton(
+            text="👍",
+            callback_data="like"
+        ))
+        builder.add(InlineKeyboardButton(
+            text="👎",
+            callback_data="dislike"
+        ))
+        message = await placeholder.edit_text(answer, reply_markup=builder.as_markup())
         self.messages_table.insert({
             "role": "assistant",
             "content": answer,
             "conv_id": conv_id,
-            "timestamp": self.get_current_ts()
+            "timestamp": self.get_current_ts(),
+            "message_id": message.message_id
         })
-        await message.reply(answer)
+
+    async def save_like(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        message_id = callback.message.message_id
+        self.likes_table.insert({
+            "user_id": user_id,
+            "message_id": message_id,
+            "feedback": "like"
+        })
+        await self.bot.edit_message_reply_markup(
+            chat_id=callback.message.chat.id,
+            message_id=message_id,
+            reply_markup=None
+        )
+
+    async def save_dislike(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        message_id = callback.message.message_id
+        self.likes_table.insert({
+            "user_id": user_id,
+            "message_id": message_id,
+            "feedback": "dislike"
+        })
+        await self.bot.edit_message_reply_markup(
+            chat_id=callback.message.chat.id,
+            message_id=message_id,
+            reply_markup=None
+        )
 
 
 def main(
