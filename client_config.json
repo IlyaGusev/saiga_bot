@@ -1,0 +1,12 @@
+{
+    "kto": {
+        "base_url": "...",
+        "api_key": "...",
+        "model_name": "IlyaGusev/saiga_llama3_8b"
+    },
+    "v4": {
+        "base_url": "...",
+        "api_key": "...",
+        "model_name": "IlyaGusev/saiga_llama3_8b"
+    }
+}

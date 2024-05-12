@@ -20,6 +20,7 @@ from transformers import AutoTokenizer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 DEFAULT_SYSTEM_PROMPT = "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
+DEFAULT_MODEL = "kto"
 
 
 class Tokenizer:
@@ -36,18 +37,25 @@ class LlmBot:
     def __init__(
         self,
         bot_token: str,
-        api_key: str,
-        base_url: str,
+        client_config_path: str,
         db_path: str,
-        model_name: str,
         temperature: float,
         top_p: float,
         max_tokens: int,
         history_max_tokens: int
     ):
         # Клиент
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-        self.model_name = model_name
+        with open(client_config_path) as r:
+            client_config = json.load(r)
+        self.clients = dict()
+        self.model_names = dict()
+        for model_name, config in client_config.items():
+            self.model_names[model_name] = config.pop("model_name")
+            self.clients[model_name] = AsyncOpenAI(**config)
+        assert self.clients
+        assert self.model_names
+
+        # Параметры
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
@@ -58,6 +66,7 @@ class LlmBot:
         self.messages_table = self.db.table("messages")
         self.conversations_table = self.db.table("current_conversations")
         self.system_prompts_table = self.db.table("system_prompts")
+        self.models_table = self.db.table("models")
         self.likes_table = self.db.table("likes")
 
         # Бот
@@ -69,6 +78,9 @@ class LlmBot:
         self.dp.message.register(self.set_system, Command("set_system"))
         self.dp.message.register(self.get_system, Command("get_system"))
         self.dp.message.register(self.reset_system, Command("reset_system"))
+        self.dp.message.register(self.set_model, Command("set_model"))
+        self.dp.message.register(self.get_model, Command("get_model"))
+        self.dp.message.register(self.get_model_list, Command("get_model_list"))
         self.dp.message.register(self.generate)
         self.dp.callback_query.register(self.save_like, F.data == "like")
         self.dp.callback_query.register(self.save_like, F.data == "dislike")
@@ -76,8 +88,22 @@ class LlmBot:
     async def start_polling(self):
         await self.dp.start_polling(self.bot)
 
-    def count_tokens(self, messages):
-        tokenizer = Tokenizer.get(self.model_name)
+    def get_current_model(self, user_id):
+        query = Query()
+        if self.models_table.contains(query.user_id == user_id):
+            return self.models_table.get(query.user_id == user_id)["model"]
+        return DEFAULT_MODEL
+
+    def set_current_model(self, user_id: int, model_name: str):
+        assert model_name in self.clients
+        query = Query()
+        if self.models_table.contains(query.user_id == user_id):
+            self.models_table.update(ops.set("model", model_name), query.user_id == user_id)
+        else:
+            self.models_table.insert({"model": model_name, "user_id": user_id})
+
+    def count_tokens(self, messages, model):
+        tokenizer = Tokenizer.get(self.model_names[model])
         tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         return len(tokens)
 
@@ -120,27 +146,27 @@ class LlmBot:
         conv_ids.sort(key=lambda x: x["timestamp"], reverse=True)
         return conv_ids[0]["conv_id"]
 
-    async def query_api(self, history, last_message: str, system_prompt: str):
+    async def query_api(self, model, history, last_message: str, system_prompt: str):
         messages = history + [{"role": "user", "content": last_message}]
         messages = self.merge_messages(messages)
-        tokens_count = self.count_tokens(messages)
+        tokens_count = self.count_tokens(messages, model=model)
         while tokens_count > self.history_max_tokens:
             messages = messages[2:]
-            tokens_count = self.count_tokens(messages)
+            tokens_count = self.count_tokens(messages, model=model)
 
         if messages[0]["role"] != "system":
             messages.insert(0, {"role": "system", "content": system_prompt})
 
-        print(messages)
-        chat_completion = await self.client.chat.completions.create(
-            model=self.model_name,
+        print(model, messages)
+        chat_completion = await self.clients[model].chat.completions.create(
+            model=self.model_names[model],
             messages=messages,
             temperature=self.temperature,
             top_p=self.top_p,
             max_tokens=self.max_tokens
         )
         answer = chat_completion.choices[0].message.content
-        print(messages, answer)
+        print(model, messages, answer)
         return answer
 
     def get_system_prompt(self, user_id):
@@ -165,6 +191,7 @@ class LlmBot:
         user_id = message.from_user.id
         text = message.text.replace("/set_system", "").strip()
         self.set_system_prompt(user_id, text)
+        self.create_conv_id(user_id)
         await message.reply(f"Новый системный промпт задан:\n\n{text}")
 
     async def get_system(self, message: Message):
@@ -175,15 +202,34 @@ class LlmBot:
         else:
             await message.reply("Системный промпт пуст")
 
+    async def set_model(self, message: Message):
+        user_id = message.from_user.id
+        model_name = message.text.replace("/set_model", "").strip()
+        if model_name in self.clients:
+            self.set_current_model(user_id, model_name)
+            self.create_conv_id(user_id)
+            await message.reply(f"Новая модель задана:\n\n{model_name}")
+        else:
+            await message.reply(f"Некорректное имя модели. Выберите из: {list(self.clients.keys())}")
+
+    async def get_model(self, message: Message):
+        user_id = message.from_user.id
+        model = self.get_current_model(user_id)
+        await message.reply(model)
+
+    async def get_model_list(self, message: Message):
+        await message.reply(str(list(self.clients.keys())))
+
     async def reset_system(self, message: Message):
         user_id = message.from_user.id
         self.set_system_prompt(user_id, DEFAULT_SYSTEM_PROMPT)
+        self.create_conv_id(user_id)
         await message.reply("Системный промпт сброшен!")
 
     async def reset(self, message: Message):
         user_id = message.from_user.id
         self.create_conv_id(user_id)
-        await message.reply("История сброшена!")
+        await message.reply("История сообщений сброшена!")
 
     async def history(self, message: Message):
         user_id = message.from_user.id
@@ -198,15 +244,17 @@ class LlmBot:
         last_message = message.text
         conv_id = self.get_current_conv_id(user_id)
         history = self.fetch_conversation(conv_id)
+        system_prompt = self.get_system_prompt(user_id)
         self.messages_table.insert({
             "role": "user",
             "content": last_message,
             "conv_id": conv_id,
             "timestamp": self.get_current_ts()
         })
-        system_prompt = self.get_system_prompt(user_id)
+        model = self.get_current_model(user_id)
         placeholder = await message.answer("💬")
         answer = await self.query_api(
+            model=model,
             history=history,
             last_message=last_message,
             system_prompt=system_prompt
@@ -226,7 +274,9 @@ class LlmBot:
             "content": answer,
             "conv_id": conv_id,
             "timestamp": self.get_current_ts(),
-            "message_id": message.message_id
+            "message_id": message.message_id,
+            "model": model,
+            "system_prompt": system_prompt
         })
 
     async def save_like(self, callback: CallbackQuery):
@@ -260,10 +310,8 @@ class LlmBot:
 
 def main(
     bot_token: str,
-    api_key: str,
-    base_url: str,
+    client_config_path: str,
     db_path: str,
-    model_name: str,
     temperature: float = 0.6,
     top_p: float = 0.9,
     max_tokens: int = 1536,
@@ -271,10 +319,8 @@ def main(
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
-        api_key=api_key,
-        base_url=base_url,
+        client_config_path=client_config_path,
         db_path=db_path,
-        model_name=model_name,
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
