@@ -5,15 +5,15 @@ import secrets
 import traceback
 from datetime import datetime, timezone
 
+import tiktoken
 import fire
 from aiogram import Bot, Dispatcher
 from aiogram import F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramBadRequest
 from openai import AsyncOpenAI
 from tinydb import TinyDB, where, Query
 from tinydb import operations as ops
@@ -22,7 +22,7 @@ from transformers import AutoTokenizer
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 DEFAULT_SYSTEM_PROMPT = "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
-DEFAULT_MODEL = "kto"
+DEFAULT_MODEL = "gpt-4o"
 
 
 class Tokenizer:
@@ -44,7 +44,8 @@ class LlmBot:
         temperature: float,
         top_p: float,
         max_tokens: int,
-        history_max_tokens: int
+        history_max_tokens: int,
+        chunk_size: int = 3500
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -71,12 +72,13 @@ class LlmBot:
         self.models_table = self.db.table("models")
         self.likes_table = self.db.table("likes")
 
-        #Клавиатуры
+        # Клавиатуры
         self.inline_models_list_kb = InlineKeyboardBuilder()
         for model_id in self.clients.keys():
             self.inline_models_list_kb.add(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
 
         # Бот
+        self.chunk_size = chunk_size
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
         self.dp.message.register(self.start, Command("start"))
@@ -90,7 +92,7 @@ class LlmBot:
         self.dp.message.register(self.generate)
         self.dp.callback_query.register(self.save_like, F.data == "like")
         self.dp.callback_query.register(self.save_like, F.data == "dislike")
-        self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith(f"setmodel:"))
+        self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith("setmodel:"))
 
     async def start_polling(self):
         await self.dp.start_polling(self.bot)
@@ -110,8 +112,12 @@ class LlmBot:
             self.models_table.insert({"model": model_name, "user_id": user_id})
 
     def count_tokens(self, messages, model):
-        tokenizer = Tokenizer.get(self.model_names[model])
-        tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+        if "api.openai.com" in str(self.clients[model].base_url):
+            encoding = tiktoken.encoding_for_model(self.model_names[model])
+            tokens = encoding.encode("\n".join([str(m["content"]) for m in messages if m["content"]]))
+        else:
+            tokenizer = Tokenizer.get(self.model_names[model])
+            tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         return len(tokens)
 
     def fetch_conversation(self, conv_id):
@@ -126,6 +132,8 @@ class LlmBot:
         new_messages = []
         prev_role = None
         for m in messages:
+            if m["content"] is None:
+                continue
             if m["role"] == prev_role:
                 new_messages[-1]["content"] += "\n" + m["content"]
                 continue
@@ -156,15 +164,16 @@ class LlmBot:
     async def query_api(self, model, history, last_message: str, system_prompt: str):
         messages = history + [{"role": "user", "content": last_message}]
         messages = self.merge_messages(messages)
+
         tokens_count = self.count_tokens(messages, model=model)
-        while tokens_count > self.history_max_tokens:
+        while tokens_count > self.history_max_tokens and len(messages) >= 3:
             messages = messages[2:]
             tokens_count = self.count_tokens(messages, model=model)
 
         if messages[0]["role"] != "system":
             messages.insert(0, {"role": "system", "content": system_prompt})
 
-        print(model, messages)
+        print(model, "####", len(messages), "####", messages[-1]["content"].replace("\n", " ")[:40])
         chat_completion = await self.clients[model].chat.completions.create(
             model=self.model_names[model],
             messages=messages,
@@ -173,7 +182,7 @@ class LlmBot:
             max_tokens=self.max_tokens
         )
         answer = chat_completion.choices[0].message.content
-        print(model, messages, answer)
+        print(model, "####", len(messages), "####", messages[-1]["content"].replace("\n", " ")[:40], "####", answer.replace("\n", " ")[:40])
         return answer
 
     def get_system_prompt(self, user_id):
@@ -192,11 +201,11 @@ class LlmBot:
     async def start(self, message: Message):
         user_id = message.from_user.id
         self.create_conv_id(user_id)
-        await message.reply(f"Привет {message.from_user.first_name}! Как тебе помочь?")
+        await message.reply("Привет! Как тебе помочь?")
 
     async def set_system(self, message: Message):
         user_id = message.from_user.id
-        text = message.text.replace("/set_system", "").strip()
+        text = message.text.replace("/setsystem", "").strip()
         self.set_system_prompt(user_id, text)
         self.create_conv_id(user_id)
         await message.reply(f"Новый системный промпт задан:\n\n{text}")
@@ -209,15 +218,15 @@ class LlmBot:
         else:
             await message.reply("Системный промпт пуст")
 
-    async def set_model_button_handler(self,callback: CallbackQuery):
+    async def set_model_button_handler(self, callback: CallbackQuery):
         user_id = callback.from_user.id
         model_name = callback.data.split(":")[1]
         if model_name in self.clients:
             self.set_current_model(user_id, model_name)
             self.create_conv_id(user_id)
-            await self.bot.send_message(chat_id=user_id,text=f"Новая модель задана:\n\n{model_name}")
+            await self.bot.send_message(chat_id=user_id, text=f"Новая модель задана:\n\n{model_name}")
         else:
-            await self.bot.send_message(chat_id=user_id,text=f"Некорректное имя модели. Выберите из: {list(self.clients.keys())}")
+            await self.bot.send_message(chat_id=user_id, text=f"Некорректное имя модели. Выберите из: {list(self.clients.keys())}")
 
     async def get_model(self, message: Message):
         user_id = message.from_user.id
@@ -268,6 +277,7 @@ class LlmBot:
                 last_message=last_message,
                 system_prompt=system_prompt
             )
+
             builder = InlineKeyboardBuilder()
             builder.add(InlineKeyboardButton(
                 text="👍",
@@ -277,25 +287,28 @@ class LlmBot:
                 text="👎",
                 callback_data="dislike"
             ))
-            try:
-                message = await placeholder.edit_text(answer, reply_markup=builder.as_markup())
-            except TelegramBadRequest:
-                print("Fallback to HTML parser")
-                message = await placeholder.edit_text(answer, reply_markup=builder.as_markup(), parse_mode=ParseMode.HTML)
+            markup = builder.as_markup()
+
+            chunk_size = self.chunk_size
+            answer_parts = [answer[i:i + chunk_size] for i in range(0, len(answer), chunk_size)]
+
+            new_message = await placeholder.edit_text(answer_parts[0], parse_mode=None)
+            for part in answer_parts[1:]:
+                new_message = await message.answer(part, parse_mode=None)
+            new_message = await new_message.edit_text(answer_parts[-1], parse_mode=None, reply_markup=markup)
 
             self.messages_table.insert({
                 "role": "assistant",
                 "content": answer,
                 "conv_id": conv_id,
                 "timestamp": self.get_current_ts(),
-                "message_id": message.message_id,
+                "message_id": new_message.message_id,
                 "model": model,
                 "system_prompt": system_prompt
             })
         except Exception:
             traceback.print_exc()
             await placeholder.edit_text("Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться.")
-
 
     async def save_like(self, callback: CallbackQuery):
         user_id = callback.from_user.id
