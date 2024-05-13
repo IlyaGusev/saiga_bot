@@ -70,28 +70,27 @@ class LlmBot:
         self.system_prompts_table = self.db.table("system_prompts")
         self.models_table = self.db.table("models")
         self.likes_table = self.db.table("likes")
-        
-        #Клавиатуры 
+
+        #Клавиатуры
         self.inline_models_list_kb = InlineKeyboardBuilder()
         for model_id in self.clients.keys():
-            self.inline_models_list_kb.add(InlineKeyboardButton(text=model_id, callback_data=f"set_model:{model_id}"))
-        
+            self.inline_models_list_kb.add(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
+
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
         self.dp.message.register(self.start, Command("start"))
         self.dp.message.register(self.reset, Command("reset"))
         self.dp.message.register(self.history, Command("history"))
-        self.dp.message.register(self.set_system, Command("set_system"))
-        self.dp.message.register(self.get_system, Command("get_system"))
-        self.dp.message.register(self.reset_system, Command("reset_system"))
-        self.dp.message.register(self.set_model, Command("set_model"))
-        self.dp.message.register(self.get_model, Command("get_model"))
-        self.dp.message.register(self.get_model_list, Command("get_model_list"))
+        self.dp.message.register(self.set_system, Command("setsystem"))
+        self.dp.message.register(self.get_system, Command("getsystem"))
+        self.dp.message.register(self.reset_system, Command("resetsystem"))
+        self.dp.message.register(self.set_model, Command("setmodel"))
+        self.dp.message.register(self.get_model, Command("getmodel"))
         self.dp.message.register(self.generate)
         self.dp.callback_query.register(self.save_like, F.data == "like")
         self.dp.callback_query.register(self.save_like, F.data == "dislike")
-        self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith(f"set_model:"))
+        self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith(f"setmodel:"))
 
     async def start_polling(self):
         await self.dp.start_polling(self.bot)
@@ -209,7 +208,7 @@ class LlmBot:
             await message.reply(prompt)
         else:
             await message.reply("Системный промпт пуст")
-    
+
     async def set_model_button_handler(self,callback: CallbackQuery):
         user_id = callback.from_user.id
         model_name = callback.data.split(":")[1]
@@ -219,23 +218,13 @@ class LlmBot:
             await self.bot.send_message(chat_id=user_id,text=f"Новая модель задана:\n\n{model_name}")
         else:
             await self.bot.send_message(chat_id=user_id,text=f"Некорректное имя модели. Выберите из: {list(self.clients.keys())}")
-    
-    async def set_model(self, message: Message):
-        user_id = message.from_user.id
-        model_name = message.text.replace("/set_model", "").strip()
-        if model_name in self.clients:
-            self.set_current_model(user_id, model_name)
-            self.create_conv_id(user_id)
-            await message.reply(f"Новая модель задана:\n\n{model_name}")
-        else:
-            await message.reply(f"Некорректное имя модели. Выберите из: {list(self.clients.keys())}")
 
     async def get_model(self, message: Message):
         user_id = message.from_user.id
         model = self.get_current_model(user_id)
         await message.reply(model)
-        
-    async def get_model_list(self, message: Message):
+
+    async def set_model(self, message: Message):
         await message.reply("Выберите модель:", reply_markup=self.inline_models_list_kb.as_markup())
 
     async def reset_system(self, message: Message):
