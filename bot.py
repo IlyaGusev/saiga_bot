@@ -90,8 +90,7 @@ class LlmBot:
         self.dp.message.register(self.set_model, Command("setmodel"))
         self.dp.message.register(self.get_model, Command("getmodel"))
         self.dp.message.register(self.generate)
-        self.dp.callback_query.register(self.save_like, F.data == "like")
-        self.dp.callback_query.register(self.save_like, F.data == "dislike")
+        self.dp.callback_query.register(self.save_feedback, F.data.startswith("feedback:"))
         self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith("setmodel:"))
 
     async def start_polling(self):
@@ -253,7 +252,7 @@ class LlmBot:
         history = self.fetch_conversation(conv_id)
         history = json.dumps(history, ensure_ascii=False)
         history = history[:3000] + "... truncated"
-        await message.reply(history)
+        await message.reply(history, parse_mode=None)
 
     async def generate(self, message: Message):
         user_id = message.from_user.id
@@ -281,11 +280,11 @@ class LlmBot:
             builder = InlineKeyboardBuilder()
             builder.add(InlineKeyboardButton(
                 text="👍",
-                callback_data="like"
+                callback_data="feedback:like"
             ))
             builder.add(InlineKeyboardButton(
                 text="👎",
-                callback_data="dislike"
+                callback_data="feedback:dislike"
             ))
             markup = builder.as_markup()
 
@@ -310,34 +309,21 @@ class LlmBot:
             traceback.print_exc()
             await placeholder.edit_text("Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться.")
 
-    async def save_like(self, callback: CallbackQuery):
+    async def save_feedback(self, callback: CallbackQuery):
         user_id = callback.from_user.id
         message_id = callback.message.message_id
+        feedback = callback.data.split(":")[1]
         self.likes_table.insert({
             "user_id": user_id,
             "message_id": message_id,
-            "feedback": "like"
+            "feedback": feedback,
+            "is_correct": True
         })
         await self.bot.edit_message_reply_markup(
             chat_id=callback.message.chat.id,
             message_id=message_id,
             reply_markup=None
         )
-
-    async def save_dislike(self, callback: CallbackQuery):
-        user_id = callback.from_user.id
-        message_id = callback.message.message_id
-        self.likes_table.insert({
-            "user_id": user_id,
-            "message_id": message_id,
-            "feedback": "dislike"
-        })
-        await self.bot.edit_message_reply_markup(
-            chat_id=callback.message.chat.id,
-            message_id=message_id,
-            reply_markup=None
-        )
-
 
 def main(
     bot_token: str,
