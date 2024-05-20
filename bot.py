@@ -3,10 +3,11 @@ import os
 import json
 import secrets
 import traceback
+import base64
 from datetime import datetime, timezone
 
-import tiktoken
 import fire
+import tiktoken
 from aiogram import Bot, Dispatcher
 from aiogram import F
 from aiogram.client.default import DefaultBotProperties
@@ -35,6 +36,102 @@ class Tokenizer:
         return cls.tokenizers[model_name]
 
 
+class Database:
+    def __init__(self, db_path: str):
+        self.db = TinyDB(db_path, ensure_ascii=False)
+        self.messages_table = self.db.table("messages")
+        self.conversations_table = self.db.table("current_conversations")
+        self.system_prompts_table = self.db.table("system_prompts")
+        self.models_table = self.db.table("models")
+        self.likes_table = self.db.table("likes")
+
+    @staticmethod
+    def get_current_ts():
+        return int(datetime.now().replace(tzinfo=timezone.utc).timestamp())
+
+    def create_conv_id(self, user_id):
+        conv_id = secrets.token_hex(nbytes=16)
+        self.conversations_table.insert({
+            "user_id": user_id,
+            "conv_id": conv_id,
+            "timestamp": self.get_current_ts()
+        })
+        return conv_id
+
+    def get_current_conv_id(self, user_id):
+        conv_ids = self.conversations_table.search(where("user_id") == user_id)
+        if not conv_ids:
+            return self.create_conv_id(user_id)
+        return max(conv_ids, key=lambda x: x["timestamp"])["conv_id"]
+
+    def fetch_conversation(self, conv_id):
+        messages = self.messages_table.search(where("conv_id") == conv_id)
+        if not messages:
+            return []
+        messages.sort(key=lambda x: x["timestamp"])
+        return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+    def get_current_model(self, user_id):
+        query = Query()
+        if self.models_table.contains(query.user_id == user_id):
+            return self.models_table.get(query.user_id == user_id)["model"]
+        return DEFAULT_MODEL
+
+    def set_current_model(self, user_id: int, model_name: str):
+        query = Query()
+        if self.models_table.contains(query.user_id == user_id):
+            self.models_table.update(ops.set("model", model_name), query.user_id == user_id)
+        else:
+            self.models_table.insert({"model": model_name, "user_id": user_id})
+
+    def get_system_prompt(self, user_id):
+        query = Query()
+        if self.system_prompts_table.contains(query.user_id == user_id):
+            return self.system_prompts_table.get(query.user_id == user_id)["prompt"]
+        return DEFAULT_SYSTEM_PROMPT
+
+    def set_system_prompt(self, user_id: int, text: str):
+        query = Query()
+        if self.system_prompts_table.contains(query.user_id == user_id):
+            self.system_prompts_table.update(ops.set("prompt", text), query.user_id == user_id)
+        else:
+            self.system_prompts_table.insert({"prompt": text, "user_id": user_id})
+
+    def save_user_message(self, content: str, conv_id: str):
+        self.messages_table.insert({
+            "role": "user",
+            "content": content,
+            "conv_id": conv_id,
+            "timestamp": self.get_current_ts()
+        })
+
+    def save_assistant_message(
+        self,
+        content: str,
+        conv_id: str,
+        message_id: int,
+        model: str,
+        system_prompt: str
+    ):
+        self.messages_table.insert({
+            "role": "assistant",
+            "content": content,
+            "conv_id": conv_id,
+            "timestamp": self.get_current_ts(),
+            "message_id": message_id,
+            "model": model,
+            "system_prompt": system_prompt
+        })
+
+    def save_feedback(self, feedback: str, user_id: int, message_id: int):
+        self.likes_table.insert({
+            "user_id": user_id,
+            "message_id": message_id,
+            "feedback": feedback,
+            "is_correct": True
+        })
+
+
 class LlmBot:
     def __init__(
         self,
@@ -45,15 +142,17 @@ class LlmBot:
         top_p: float,
         max_tokens: int,
         history_max_tokens: int,
-        chunk_size: int = 3500
+        chunk_size: int
     ):
         # Клиент
         with open(client_config_path) as r:
             client_config = json.load(r)
         self.clients = dict()
         self.model_names = dict()
+        self.can_handle_images = dict()
         for model_name, config in client_config.items():
             self.model_names[model_name] = config.pop("model_name")
+            self.can_handle_images[model_name] = config.pop("can_handle_images", False)
             self.clients[model_name] = AsyncOpenAI(**config)
         assert self.clients
         assert self.model_names
@@ -65,12 +164,7 @@ class LlmBot:
         self.history_max_tokens = history_max_tokens
 
         # База
-        self.db = TinyDB(db_path, ensure_ascii=False)
-        self.messages_table = self.db.table("messages")
-        self.conversations_table = self.db.table("current_conversations")
-        self.system_prompts_table = self.db.table("system_prompts")
-        self.models_table = self.db.table("models")
-        self.likes_table = self.db.table("likes")
+        self.db = Database(db_path)
 
         # Клавиатуры
         self.inline_models_list_kb = InlineKeyboardBuilder()
@@ -96,184 +190,77 @@ class LlmBot:
     async def start_polling(self):
         await self.dp.start_polling(self.bot)
 
-    def get_current_model(self, user_id):
-        query = Query()
-        if self.models_table.contains(query.user_id == user_id):
-            return self.models_table.get(query.user_id == user_id)["model"]
-        return DEFAULT_MODEL
-
-    def set_current_model(self, user_id: int, model_name: str):
-        assert model_name in self.clients
-        query = Query()
-        if self.models_table.contains(query.user_id == user_id):
-            self.models_table.update(ops.set("model", model_name), query.user_id == user_id)
-        else:
-            self.models_table.insert({"model": model_name, "user_id": user_id})
-
-    def count_tokens(self, messages, model):
-        if "api.openai.com" in str(self.clients[model].base_url):
-            encoding = tiktoken.encoding_for_model(self.model_names[model])
-            tokens = encoding.encode("\n".join([str(m["content"]) for m in messages if m["content"]]))
-        else:
-            tokenizer = Tokenizer.get(self.model_names[model])
-            tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-        return len(tokens)
-
-    def fetch_conversation(self, conv_id):
-        messages = self.messages_table.search(where("conv_id") == conv_id)
-        if not messages:
-            return []
-        messages.sort(key=lambda x: x["timestamp"])
-        return [{"role": m["role"], "content": m["content"]} for m in messages]
-
-    @staticmethod
-    def merge_messages(messages):
-        new_messages = []
-        prev_role = None
-        for m in messages:
-            if m["content"] is None:
-                continue
-            if m["role"] == prev_role:
-                new_messages[-1]["content"] += "\n" + m["content"]
-                continue
-            prev_role = m["role"]
-            new_messages.append(m)
-        return new_messages
-
-    @staticmethod
-    def get_current_ts():
-        return int(datetime.now().replace(tzinfo=timezone.utc).timestamp())
-
-    def create_conv_id(self, user_id):
-        conv_id = secrets.token_hex(nbytes=16)
-        self.conversations_table.insert({
-            "user_id": user_id,
-            "conv_id": conv_id,
-            "timestamp": self.get_current_ts()
-        })
-        return conv_id
-
-    def get_current_conv_id(self, user_id):
-        conv_ids = self.conversations_table.search(where("user_id") == user_id)
-        if not conv_ids:
-            return self.create_conv_id(user_id)
-        conv_ids.sort(key=lambda x: x["timestamp"], reverse=True)
-        return conv_ids[0]["conv_id"]
-
-    async def query_api(self, model, history, last_message: str, system_prompt: str):
-        messages = history + [{"role": "user", "content": last_message}]
-        messages = self.merge_messages(messages)
-
-        tokens_count = self.count_tokens(messages, model=model)
-        while tokens_count > self.history_max_tokens and len(messages) >= 3:
-            messages = messages[2:]
-            tokens_count = self.count_tokens(messages, model=model)
-
-        if messages[0]["role"] != "system":
-            messages.insert(0, {"role": "system", "content": system_prompt})
-
-        print(model, "####", len(messages), "####", messages[-1]["content"].replace("\n", " ")[:40])
-        chat_completion = await self.clients[model].chat.completions.create(
-            model=self.model_names[model],
-            messages=messages,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            max_tokens=self.max_tokens
-        )
-        answer = chat_completion.choices[0].message.content
-        print(model, "####", len(messages), "####", messages[-1]["content"].replace("\n", " ")[:40], "####", answer.replace("\n", " ")[:40])
-        return answer
-
-    def get_system_prompt(self, user_id):
-        query = Query()
-        if self.system_prompts_table.contains(query.user_id == user_id):
-            return self.system_prompts_table.get(query.user_id == user_id)["prompt"]
-        return DEFAULT_SYSTEM_PROMPT
-
-    def set_system_prompt(self, user_id: int, text: str):
-        query = Query()
-        if self.system_prompts_table.contains(query.user_id == user_id):
-            self.system_prompts_table.update(ops.set("prompt", text), query.user_id == user_id)
-        else:
-            self.system_prompts_table.insert({"prompt": text, "user_id": user_id})
-
     async def start(self, message: Message):
         user_id = message.from_user.id
-        self.create_conv_id(user_id)
+        self.db.create_conv_id(user_id)
         await message.reply("Привет! Как тебе помочь?")
 
     async def set_system(self, message: Message):
         user_id = message.from_user.id
         text = message.text.replace("/setsystem", "").strip()
-        self.set_system_prompt(user_id, text)
-        self.create_conv_id(user_id)
+        self.db.set_system_prompt(user_id, text)
+        self.db.create_conv_id(user_id)
         await message.reply(f"Новый системный промпт задан:\n\n{text}")
 
     async def get_system(self, message: Message):
         user_id = message.from_user.id
-        prompt = self.get_system_prompt(user_id)
+        prompt = self.db.get_system_prompt(user_id)
         if prompt.strip():
             await message.reply(prompt)
         else:
             await message.reply("Системный промпт пуст")
 
-    async def set_model_button_handler(self, callback: CallbackQuery):
-        user_id = callback.from_user.id
-        model_name = callback.data.split(":")[1]
-        if model_name in self.clients:
-            self.set_current_model(user_id, model_name)
-            self.create_conv_id(user_id)
-            await self.bot.send_message(chat_id=user_id, text=f"Новая модель задана:\n\n{model_name}")
-        else:
-            await self.bot.send_message(chat_id=user_id, text=f"Некорректное имя модели. Выберите из: {list(self.clients.keys())}")
+    async def reset_system(self, message: Message):
+        user_id = message.from_user.id
+        self.db.set_system_prompt(user_id, DEFAULT_SYSTEM_PROMPT)
+        self.db.create_conv_id(user_id)
+        await message.reply("Системный промпт сброшен!")
 
     async def get_model(self, message: Message):
         user_id = message.from_user.id
-        model = self.get_current_model(user_id)
+        model = self.db.get_current_model(user_id)
         await message.reply(model)
 
     async def set_model(self, message: Message):
         await message.reply("Выберите модель:", reply_markup=self.inline_models_list_kb.as_markup())
 
-    async def reset_system(self, message: Message):
-        user_id = message.from_user.id
-        self.set_system_prompt(user_id, DEFAULT_SYSTEM_PROMPT)
-        self.create_conv_id(user_id)
-        await message.reply("Системный промпт сброшен!")
-
     async def reset(self, message: Message):
         user_id = message.from_user.id
-        self.create_conv_id(user_id)
+        self.db.create_conv_id(user_id)
         await message.reply("История сообщений сброшена!")
 
     async def history(self, message: Message):
         user_id = message.from_user.id
-        conv_id = self.get_current_conv_id(user_id)
-        history = self.fetch_conversation(conv_id)
+        conv_id = self.db.get_current_conv_id(user_id)
+        history = self.db.fetch_conversation(conv_id)
+        for m in history:
+            if not isinstance(m["content"], str):
+                m["content"] = "Not text"
         history = json.dumps(history, ensure_ascii=False)
-        history = history[:3000] + "... truncated"
+        if len(history) > self.chunk_size:
+            history = history[:self.chunk_size] + "... truncated"
         await message.reply(history, parse_mode=None)
 
     async def generate(self, message: Message):
         user_id = message.from_user.id
-        last_message = message.text
-        conv_id = self.get_current_conv_id(user_id)
-        history = self.fetch_conversation(conv_id)
-        system_prompt = self.get_system_prompt(user_id)
-        self.messages_table.insert({
-            "role": "user",
-            "content": last_message,
-            "conv_id": conv_id,
-            "timestamp": self.get_current_ts()
-        })
-        model = self.get_current_model(user_id)
+        conv_id = self.db.get_current_conv_id(user_id)
+        history = self.db.fetch_conversation(conv_id)
+        system_prompt = self.db.get_system_prompt(user_id)
+        model = self.db.get_current_model(user_id)
+
+        content = await self._build_content(message)
+        if not isinstance(content, str) and not self.can_handle_images[model]:
+            await message.answer("Выбранная модель не может обработать ваше сообщение")
+            return
+
+        self.db.save_user_message(content, conv_id=conv_id)
         placeholder = await message.answer("💬")
 
         try:
-            answer = await self.query_api(
+            answer = await self._query_api(
                 model=model,
                 history=history,
-                last_message=last_message,
+                user_content=content,
                 system_prompt=system_prompt
             )
 
@@ -296,15 +283,14 @@ class LlmBot:
                 new_message = await message.answer(part, parse_mode=None)
             new_message = await new_message.edit_text(answer_parts[-1], parse_mode=None, reply_markup=markup)
 
-            self.messages_table.insert({
-                "role": "assistant",
-                "content": answer,
-                "conv_id": conv_id,
-                "timestamp": self.get_current_ts(),
-                "message_id": new_message.message_id,
-                "model": model,
-                "system_prompt": system_prompt
-            })
+            self.db.save_assistant_message(
+                content=answer,
+                conv_id=conv_id,
+                message_id=new_message.message_id,
+                model=model,
+                system_prompt=system_prompt
+            )
+
         except Exception:
             traceback.print_exc()
             await placeholder.edit_text("Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться.")
@@ -313,17 +299,131 @@ class LlmBot:
         user_id = callback.from_user.id
         message_id = callback.message.message_id
         feedback = callback.data.split(":")[1]
-        self.likes_table.insert({
-            "user_id": user_id,
-            "message_id": message_id,
-            "feedback": feedback,
-            "is_correct": True
-        })
+        self.db.save_feedback(feedback, user_id=user_id, message_id=message_id)
         await self.bot.edit_message_reply_markup(
             chat_id=callback.message.chat.id,
             message_id=message_id,
             reply_markup=None
         )
+
+    async def set_model_button_handler(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        model_name = callback.data.split(":")[1]
+        assert model_name in self.clients
+        if model_name in self.clients:
+            self.db.set_current_model(user_id, model_name)
+            self.db.create_conv_id(user_id)
+            await self.bot.send_message(chat_id=user_id, text=f"Новая модель задана:\n\n{model_name}")
+        else:
+            model_list = list(self.clients.keys())
+            await self.bot.send_message(chat_id=user_id, text=f"Некорректное имя модели. Выберите из: {model_list}")
+
+    def _count_tokens(self, messages, model):
+        if "api.openai.com" in str(self.clients[model].base_url):
+            encoding = tiktoken.encoding_for_model(self.model_names[model])
+            tokens_count = 0
+            for m in messages:
+                if isinstance(m["content"], str):
+                    tokens_count += len(encoding.encode(m["content"]))
+                else:
+                    tokens_count += 1000
+        else:
+            tokenizer = Tokenizer.get(self.model_names[model])
+            tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+            tokens_count = len(tokens)
+        return tokens_count
+
+    @staticmethod
+    def _merge_messages(messages):
+        new_messages = []
+        prev_role = None
+        for m in messages:
+            if m["content"] is None:
+                continue
+            if m["role"] == prev_role:
+                is_current_str = isinstance(m["content"], str)
+                is_prev_str = isinstance(new_messages[-1]["content"], str)
+                if is_current_str and is_prev_str:
+                    new_messages[-1]["content"] += "\n" + m["content"]
+                    continue
+            prev_role = m["role"]
+            new_messages.append(m)
+        return new_messages
+
+    def _crop_content(self, content):
+        if isinstance(content, str):
+            return content.replace("\n", " ")[:40]
+        return "Not text"
+
+    async def _query_api(self, model, history, user_content, system_prompt: str):
+        messages = history + [{"role": "user", "content": user_content}]
+        messages = self._merge_messages(messages)
+
+        tokens_count = self._count_tokens(messages, model=model)
+        while tokens_count > self.history_max_tokens and len(messages) >= 3:
+            messages = messages[2:]
+            tokens_count = self._count_tokens(messages, model=model)
+
+        if messages[0]["role"] != "system":
+            messages.insert(0, {"role": "system", "content": system_prompt})
+
+        print(model, "####", len(messages), "####", self._crop_content(messages[-1]["content"]))
+        chat_completion = await self.clients[model].chat.completions.create(
+            model=self.model_names[model],
+            messages=messages,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            max_tokens=self.max_tokens
+        )
+        answer = chat_completion.choices[0].message.content
+        print(
+            model, "####",
+            len(messages), "####",
+            self._crop_content(messages[-1]["content"]), "####",
+            self._crop_content(answer)
+        )
+        return answer
+
+    async def _build_content(self, message: Message):
+        content_type = message.content_type
+        if content_type == "text":
+            return message.text
+
+        photo = None
+        photo_ext = (".jpg", "jpeg", ".png", ".webp", ".gif")
+        if content_type == "photo":
+            document = message.photo[-1]
+            file_info = await self.bot.get_file(document.file_id)
+            photo = file_info.file_path
+        elif content_type == "document":
+            document = message.document
+            file_info = await self.bot.get_file(document.file_id)
+            file_path = file_info.file_path
+            if "." + file_path.split(".")[-1].lower() in photo_ext:
+                photo = file_path
+
+        if photo:
+            file_stream = await self.bot.download_file(photo)
+            assert file_stream
+            file_stream.seek(0)
+            base64_image = base64.b64encode(file_stream.read()).decode("utf-8")
+            assert base64_image
+            content = []
+            if message.caption:
+                content.append({
+                    "type": "text",
+                    "text": message.caption
+                })
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{base64_image}"
+                }
+            })
+            return content
+
+        return None
+
 
 def main(
     bot_token: str,
@@ -332,7 +432,8 @@ def main(
     temperature: float = 0.6,
     top_p: float = 0.9,
     max_tokens: int = 1536,
-    history_max_tokens: int = 6144
+    history_max_tokens: int = 6144,
+    chunk_size: int = 3500
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
@@ -341,7 +442,8 @@ def main(
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
-        history_max_tokens=history_max_tokens
+        history_max_tokens=history_max_tokens,
+        chunk_size=chunk_size
     )
     asyncio.run(bot.start_polling())
 
