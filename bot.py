@@ -162,6 +162,10 @@ class LlmBot:
                 await message.answer("Вы превысили лимит запросов по gpt-4o, переключите модель на другую с помощью /setmodel")
                 return
 
+        if model not in self.clients:
+            await message.answer("Выбранная модель больше не поддерживается, переключите на другую с помощью /setmodel")
+            return
+
         conv_id = self.db.get_current_conv_id(user_id)
         history = self.db.fetch_conversation(conv_id)
         system_prompt = self.db.get_system_prompt(user_id)
