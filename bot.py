@@ -1,10 +1,8 @@
 import asyncio
 import os
 import json
-import secrets
 import traceback
 import base64
-from datetime import datetime, timezone
 
 import fire
 import tiktoken
@@ -16,9 +14,8 @@ from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
-from tinydb import TinyDB, where, Query
-from tinydb import operations as ops
 from transformers import AutoTokenizer
+from database import Database
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -36,102 +33,6 @@ class Tokenizer:
         return cls.tokenizers[model_name]
 
 
-class Database:
-    def __init__(self, db_path: str):
-        self.db = TinyDB(db_path, ensure_ascii=False)
-        self.messages_table = self.db.table("messages")
-        self.conversations_table = self.db.table("current_conversations")
-        self.system_prompts_table = self.db.table("system_prompts")
-        self.models_table = self.db.table("models")
-        self.likes_table = self.db.table("likes")
-
-    @staticmethod
-    def get_current_ts():
-        return int(datetime.now().replace(tzinfo=timezone.utc).timestamp())
-
-    def create_conv_id(self, user_id):
-        conv_id = secrets.token_hex(nbytes=16)
-        self.conversations_table.insert({
-            "user_id": user_id,
-            "conv_id": conv_id,
-            "timestamp": self.get_current_ts()
-        })
-        return conv_id
-
-    def get_current_conv_id(self, user_id):
-        conv_ids = self.conversations_table.search(where("user_id") == user_id)
-        if not conv_ids:
-            return self.create_conv_id(user_id)
-        return max(conv_ids, key=lambda x: x["timestamp"])["conv_id"]
-
-    def fetch_conversation(self, conv_id):
-        messages = self.messages_table.search(where("conv_id") == conv_id)
-        if not messages:
-            return []
-        messages.sort(key=lambda x: x["timestamp"])
-        return [{"role": m["role"], "content": m["content"]} for m in messages]
-
-    def get_current_model(self, user_id):
-        query = Query()
-        if self.models_table.contains(query.user_id == user_id):
-            return self.models_table.get(query.user_id == user_id)["model"]
-        return DEFAULT_MODEL
-
-    def set_current_model(self, user_id: int, model_name: str):
-        query = Query()
-        if self.models_table.contains(query.user_id == user_id):
-            self.models_table.update(ops.set("model", model_name), query.user_id == user_id)
-        else:
-            self.models_table.insert({"model": model_name, "user_id": user_id})
-
-    def get_system_prompt(self, user_id):
-        query = Query()
-        if self.system_prompts_table.contains(query.user_id == user_id):
-            return self.system_prompts_table.get(query.user_id == user_id)["prompt"]
-        return DEFAULT_SYSTEM_PROMPT
-
-    def set_system_prompt(self, user_id: int, text: str):
-        query = Query()
-        if self.system_prompts_table.contains(query.user_id == user_id):
-            self.system_prompts_table.update(ops.set("prompt", text), query.user_id == user_id)
-        else:
-            self.system_prompts_table.insert({"prompt": text, "user_id": user_id})
-
-    def save_user_message(self, content: str, conv_id: str):
-        self.messages_table.insert({
-            "role": "user",
-            "content": content,
-            "conv_id": conv_id,
-            "timestamp": self.get_current_ts()
-        })
-
-    def save_assistant_message(
-        self,
-        content: str,
-        conv_id: str,
-        message_id: int,
-        model: str,
-        system_prompt: str
-    ):
-        self.messages_table.insert({
-            "role": "assistant",
-            "content": content,
-            "conv_id": conv_id,
-            "timestamp": self.get_current_ts(),
-            "message_id": message_id,
-            "model": model,
-            "system_prompt": system_prompt
-        })
-
-    def save_feedback(self, feedback: str, user_id: int, message_id: int):
-        self.likes_table.insert({
-            "user_id": user_id,
-            "message_id": message_id,
-            "feedback": feedback,
-            "is_correct": True
-        })
-
-
 class LlmBot:
     def __init__(
         self,
@@ -142,7 +43,8 @@ class LlmBot:
         top_p: float,
         max_tokens: int,
         history_max_tokens: int,
-        chunk_size: int
+        chunk_size: int,
+        user_message_limit: int
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -156,6 +58,8 @@ class LlmBot:
             self.clients[model_name] = AsyncOpenAI(**config)
         assert self.clients
         assert self.model_names
+
+        self.user_message_limit = user_message_limit
 
         # Параметры
         self.temperature = temperature
@@ -183,6 +87,7 @@ class LlmBot:
         self.dp.message.register(self.reset_system, Command("resetsystem"))
         self.dp.message.register(self.set_model, Command("setmodel"))
         self.dp.message.register(self.get_model, Command("getmodel"))
+        self.dp.message.register(self.get_count, Command("getcount"))
         self.dp.message.register(self.generate)
         self.dp.callback_query.register(self.save_feedback, F.data.startswith("feedback:"))
         self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith("setmodel:"))
@@ -194,6 +99,11 @@ class LlmBot:
         user_id = message.from_user.id
         self.db.create_conv_id(user_id)
         await message.reply("Привет! Как тебе помочь?")
+
+    async def get_count(self, message: Message) -> int:
+        user_id = message.from_user.id
+        count = self.db.count_user_messages(user_id)
+        await message.reply("Осталось запросов: {}".format(self.user_message_limit - count))
 
     async def set_system(self, message: Message):
         user_id = message.from_user.id
@@ -243,10 +153,18 @@ class LlmBot:
 
     async def generate(self, message: Message):
         user_id = message.from_user.id
+        model = self.db.get_current_model(user_id)
+        if model == "gpt-4o":
+            count = self.db.count_user_messages(user_id)
+            print(user_id, count)
+            if count > self.user_message_limit:
+                print(user_id, "limit")
+                await message.answer("Вы превысили лимит запросов по gpt-4o, переключите модель на другую с помощью /setmodel")
+                return
+
         conv_id = self.db.get_current_conv_id(user_id)
         history = self.db.fetch_conversation(conv_id)
         system_prompt = self.db.get_system_prompt(user_id)
-        model = self.db.get_current_model(user_id)
 
         content = await self._build_content(message)
         if not isinstance(content, str) and not self.can_handle_images[model]:
@@ -433,7 +351,8 @@ def main(
     top_p: float = 0.9,
     max_tokens: int = 1536,
     history_max_tokens: int = 6144,
-    chunk_size: int = 3500
+    chunk_size: int = 3500,
+    user_message_limit: int = 100
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
@@ -443,7 +362,8 @@ def main(
         top_p=top_p,
         max_tokens=max_tokens,
         history_max_tokens=history_max_tokens,
-        chunk_size=chunk_size
+        chunk_size=chunk_size,
+        user_message_limit=user_message_limit
     )
     asyncio.run(bot.start_polling())
 
