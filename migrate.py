@@ -1,4 +1,3 @@
-import os
 import json
 
 import fire
@@ -7,7 +6,6 @@ from tqdm import tqdm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import Base, Conversations, Messages, SystemPrompts, Models, Likes
-from database import Database, Conversations, Messages, SystemPrompts, Models, Likes
 
 
 def migrate_tinydb_to_sqlite(tinydb, sqlite_db):

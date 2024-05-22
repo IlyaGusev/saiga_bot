@@ -1,9 +1,7 @@
 import json
 
 import fire
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from database import Database, Base, Conversations, Messages
+from database import Database
 
 
 def main(db_path, output_path):
@@ -29,4 +27,3 @@ def main(db_path, output_path):
 
 if __name__ == "__main__":
     fire.Fire(main)
-
