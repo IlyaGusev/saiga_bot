@@ -1,4 +1,5 @@
 import secrets
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData
@@ -95,7 +96,7 @@ class Database:
             )
             if not messages:
                 return []
-            return [{"role": m.role, "content": m.content} for m in messages]
+            return [{"role": m.role, "content": self._parse_content(m.content)} for m in messages]
 
     def get_current_model(self, user_id):
         with self.Session() as session:
@@ -135,7 +136,7 @@ class Database:
         with self.Session() as session:
             new_message = Messages(
                 role="user",
-                content=content,
+                content=self._serialize_content(content),
                 conv_id=conv_id,
                 timestamp=self.get_current_ts()
             )
@@ -181,3 +182,25 @@ class Database:
                 )
                 count += len(messages)
             return count
+
+    def get_all_conv_ids(self):
+        with self.Session() as session:
+            conversations = session.query(Conversations).all()
+            return [conv.conv_id for conv in conversations]
+
+    def _serialize_content(self, content):
+        if isinstance(content, str):
+            return content
+        return json.dumps(content)
+
+    def _parse_content(self, content):
+        try:
+            parsed_content = json.loads(content)
+            if not isinstance(parsed_content, list):
+                return content
+            for m in parsed_content:
+                if not isinstance(m, dict):
+                    return content
+            return parsed_content
+        except json.JSONDecodeError:
+            return content

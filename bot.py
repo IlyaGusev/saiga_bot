@@ -276,12 +276,14 @@ class LlmBot:
     async def _query_api(self, model, history, user_content, system_prompt: str):
         messages = history + [{"role": "user", "content": user_content}]
         messages = self._merge_messages(messages)
+        assert messages
 
         tokens_count = self._count_tokens(messages, model=model)
         while tokens_count > self.history_max_tokens and len(messages) >= 3:
             messages = messages[2:]
             tokens_count = self._count_tokens(messages, model=model)
 
+        assert messages
         if messages[0]["role"] != "system":
             messages.insert(0, {"role": "system", "content": system_prompt})
 
