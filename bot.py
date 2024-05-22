@@ -170,6 +170,9 @@ class LlmBot:
         if not isinstance(content, str) and not self.can_handle_images[model]:
             await message.answer("Выбранная модель не может обработать ваше сообщение")
             return
+        if content is None:
+            await message.answer("Такой тип сообщений (ещё) не поддерживается")
+            return
 
         self.db.save_user_message(content, conv_id=conv_id)
         placeholder = await message.answer("💬")
