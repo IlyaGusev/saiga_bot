@@ -1,6 +1,6 @@
 aiogram==3.6.0
 openai==1.28.1
-tinydb==4.7.1
+sqlalchemy==2.0.15
 transformers==4.38.1
 fire==0.5.0
 tiktoken==0.7.0
