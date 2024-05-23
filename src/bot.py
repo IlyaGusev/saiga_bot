@@ -15,12 +15,10 @@ from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer
-from database import Database
+
+from src.database import Database
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-DEFAULT_SYSTEM_PROMPT = "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
-DEFAULT_MODEL = "gpt-4o"
 
 
 class Tokenizer:
@@ -52,12 +50,15 @@ class LlmBot:
         self.clients = dict()
         self.model_names = dict()
         self.can_handle_images = dict()
+        self.default_prompts = dict()
         for model_name, config in client_config.items():
             self.model_names[model_name] = config.pop("model_name")
             self.can_handle_images[model_name] = config.pop("can_handle_images", False)
+            self.default_prompts[model_name] = config.pop("system_prompt", "")
             self.clients[model_name] = AsyncOpenAI(**config)
         assert self.clients
         assert self.model_names
+        assert self.default_prompts
 
         self.user_message_limit = user_message_limit
 
@@ -114,7 +115,7 @@ class LlmBot:
 
     async def get_system(self, message: Message):
         user_id = message.from_user.id
-        prompt = self.db.get_system_prompt(user_id)
+        prompt = self.db.get_system_prompt(user_id, self.default_prompts)
         if prompt.strip():
             await message.reply(prompt)
         else:
@@ -122,7 +123,8 @@ class LlmBot:
 
     async def reset_system(self, message: Message):
         user_id = message.from_user.id
-        self.db.set_system_prompt(user_id, DEFAULT_SYSTEM_PROMPT)
+        model = self.db.get_current_model(user_id)
+        self.db.set_system_prompt(user_id, self.default_prompts.get(model, ""))
         self.db.create_conv_id(user_id)
         await message.reply("Системный промпт сброшен!")
 
@@ -168,7 +170,7 @@ class LlmBot:
 
         conv_id = self.db.get_current_conv_id(user_id)
         history = self.db.fetch_conversation(conv_id)
-        system_prompt = self.db.get_system_prompt(user_id)
+        system_prompt = self.db.get_system_prompt(user_id, self.default_prompts)
 
         content = await self._build_content(message)
         if not isinstance(content, str) and not self.can_handle_images[model]:

@@ -5,7 +5,8 @@ from tinydb import TinyDB
 from tqdm import tqdm
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from database import Base, Conversations, Messages, SystemPrompts, Models, Likes
+
+from src.database import Base, Conversations, Messages, SystemPrompts, Models, Likes
 
 
 def migrate_tinydb_to_sqlite(tinydb, sqlite_db):

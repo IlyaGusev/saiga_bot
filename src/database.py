@@ -10,7 +10,6 @@ Base = declarative_base()
 metadata = MetaData()
 
 DEFAULT_MODEL = "gpt-4o"
-DEFAULT_SYSTEM_PROMPT = "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
 
 
 class Messages(Base):
@@ -36,7 +35,8 @@ class Conversations(Base):
 class SystemPrompts(Base):
     __tablename__ = 'system_prompts'
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, unique=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    model = Column(String, nullable=True, index=True)
     prompt = Column(Text, nullable=False)
 
 
@@ -86,7 +86,7 @@ class Database:
                 return self.create_conv_id(user_id)
             return conv.conv_id
 
-    def fetch_conversation(self, conv_id):
+    def fetch_conversation(self, conv_id, include_meta: bool = False):
         with self.Session() as session:
             messages = (
                 session.query(Messages)
@@ -96,7 +96,17 @@ class Database:
             )
             if not messages:
                 return []
-            return [{"role": m.role, "content": self._parse_content(m.content)} for m in messages]
+            clean_messages = []
+            for m in messages:
+                message = {
+                    "role": m.role,
+                    "content": self._parse_content(m.content)
+                }
+                if include_meta:
+                    message["model"] = m.model
+                    message["system_prompt"] = m.system_prompt
+                clean_messages.append(message)
+            return clean_messages
 
     def get_current_model(self, user_id):
         with self.Session() as session:
@@ -115,20 +125,36 @@ class Database:
                 session.add(new_model)
             session.commit()
 
-    def get_system_prompt(self, user_id):
+    def get_system_prompt(self, user_id, default_prompts):
+        current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            prompt = session.query(SystemPrompts).filter(SystemPrompts.user_id == user_id).first()
+            prompt = (
+                session.query(SystemPrompts)
+                .filter(SystemPrompts.user_id == user_id)
+                .filter(SystemPrompts.model == current_model)
+                .first()
+            )
             if prompt:
                 return prompt.prompt
-            return DEFAULT_SYSTEM_PROMPT
+            return default_prompts.get(current_model, "")
 
     def set_system_prompt(self, user_id: int, text: str):
+        current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            prompt = session.query(SystemPrompts).filter(SystemPrompts.user_id == user_id).first()
+            prompt = (
+                session.query(SystemPrompts)
+                .filter(SystemPrompts.user_id == user_id)
+                .filter(SystemPrompts.model == current_model)
+                .first()
+            )
             if prompt:
                 prompt.prompt = text
             else:
-                new_prompt = SystemPrompts(user_id=user_id, prompt=text)
+                new_prompt = SystemPrompts(
+                    user_id=user_id,
+                    prompt=text,
+                    model=current_model
+                )
                 session.add(new_prompt)
             session.commit()
 

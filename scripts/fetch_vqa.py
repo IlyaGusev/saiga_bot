@@ -1,7 +1,8 @@
 import json
 
 import fire
-from database import Database
+
+from src.database import Database
 
 
 def main(db_path, output_path):

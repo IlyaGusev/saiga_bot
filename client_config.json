@@ -1,12 +1,21 @@
 {
-    "kto": {
-        "base_url": "...",
-        "api_key": "...",
-        "model_name": "IlyaGusev/saiga_llama3_8b"
+    "saiga-v5": {
+        "base_url": "",
+        "api_key": "",
+        "model_name": "IlyaGusev/saiga_llama3_8b",
+        "system_prompt": "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
     },
-    "v4": {
-        "base_url": "...",
-        "api_key": "...",
-        "model_name": "IlyaGusev/saiga_llama3_8b"
+    "gpt-4o": {
+        "base_url": "",
+        "api_key": "",
+        "model_name": "gpt-4o",
+        "can_handle_images": true,
+        "system_prompt": "Ты - gpt-4o, новейшая языковая модель, разработанная OpenAI"
+    },
+    "suzume": {
+        "base_url": "",
+        "api_key": "",
+        "model_name": "lightblue/suzume-llama-3-8B-multilingual",
+        "system_prompt": "Ты — Suzume, языковая модель, разработанная Lightblue"
     }
 }
