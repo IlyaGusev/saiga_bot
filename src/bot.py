@@ -158,9 +158,7 @@ class LlmBot:
         model = self.db.get_current_model(user_id)
         if model == "gpt-4o":
             count = self.db.count_user_messages(user_id)
-            print(user_id, count)
             if count > self.user_message_limit:
-                print(user_id, "limit")
                 await message.answer("Вы превысили лимит запросов по gpt-4o, переключите модель на другую с помощью /setmodel")
                 return
 
