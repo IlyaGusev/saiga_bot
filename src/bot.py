@@ -6,8 +6,7 @@ import base64
 
 import fire
 import tiktoken
-from aiogram import Bot, Dispatcher
-from aiogram import F
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -21,12 +20,9 @@ from src.database import Database
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-DEFAULT_PARAMS = {
-    "temperature": 0.6,
-    "top_p": 0.9,
-    "max_tokens": 1536,
-}
-
+DEFAULT_MESSAGE_COUNT_LIMIT = 10000
+TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
+TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 
 class Tokenizer:
     tokenizers = dict()
@@ -45,8 +41,7 @@ class LlmBot:
         client_config_path: str,
         db_path: str,
         history_max_tokens: int,
-        chunk_size: int,
-        user_message_limit: int
+        chunk_size: int
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -56,20 +51,22 @@ class LlmBot:
         self.can_handle_images = dict()
         self.default_prompts = dict()
         self.default_params = dict()
+        self.limits = dict()
         for model_name, config in client_config.items():
             self.model_names[model_name] = config.pop("model_name")
             self.can_handle_images[model_name] = config.pop("can_handle_images", False)
             self.default_prompts[model_name] = config.pop("system_prompt", "")
-            self.default_params[model_name] = config.pop("params", DEFAULT_PARAMS)
+            if "params" in config:
+                self.default_params[model_name] = config.pop("params")
+            self.limits[model_name] = config.pop("message_count_limit", DEFAULT_MESSAGE_COUNT_LIMIT)
             self.clients[model_name] = AsyncOpenAI(**config)
         assert self.clients
         assert self.model_names
         assert self.default_prompts
 
-        self.user_message_limit = user_message_limit
-
         # Параметры
         self.history_max_tokens = history_max_tokens
+        self.chunk_size = chunk_size
 
         # База
         self.db = Database(db_path)
@@ -79,8 +76,25 @@ class LlmBot:
         for model_id in self.clients.keys():
             self.inline_models_list_kb.row(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
 
+        self.likes_kb = InlineKeyboardBuilder()
+        self.likes_kb.add(InlineKeyboardButton(
+            text="👍",
+            callback_data="feedback:like"
+        ))
+        self.likes_kb.add(InlineKeyboardButton(
+            text="👎",
+            callback_data="feedback:dislike"
+        ))
+
+        self.temperature_kb = InlineKeyboardBuilder()
+        for value in TEMPERATURE_RANGE:
+            self.temperature_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settemperature:{value}"))
+
+        self.top_p_kb = InlineKeyboardBuilder()
+        for value in TOP_P_RANGE:
+            self.top_p_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settopp:{value}"))
+
         # Бот
-        self.chunk_size = chunk_size
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
         self.dp.message.register(self.start, Command("start"))
@@ -92,9 +106,14 @@ class LlmBot:
         self.dp.message.register(self.set_model, Command("setmodel"))
         self.dp.message.register(self.get_model, Command("getmodel"))
         self.dp.message.register(self.get_count, Command("getcount"))
+        self.dp.message.register(self.get_params, Command("getparams"))
+        self.dp.message.register(self.set_temperature, Command("settemperature"))
+        self.dp.message.register(self.set_top_p, Command("settopp"))
         self.dp.message.register(self.generate)
         self.dp.callback_query.register(self.save_feedback, F.data.startswith("feedback:"))
         self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith("setmodel:"))
+        self.dp.callback_query.register(self.set_temperature_button_handler, F.data.startswith("settemperature:"))
+        self.dp.callback_query.register(self.set_top_p_button_handler, F.data.startswith("settopp:"))
 
     async def start_polling(self):
         await self.dp.start_polling(self.bot)
@@ -106,8 +125,9 @@ class LlmBot:
 
     async def get_count(self, message: Message) -> int:
         user_id = message.from_user.id
-        count = self.db.count_user_messages(user_id)
-        await message.reply("Осталось запросов: {}".format(self.user_message_limit - count))
+        model = self.db.get_current_model(user_id)
+        count = self.db.count_user_messages(user_id, model)
+        await message.reply("Осталось запросов к {}: {}".format(model, self.limits[model] - count))
 
     async def set_system(self, message: Message):
         user_id = message.from_user.id
@@ -130,6 +150,29 @@ class LlmBot:
         self.db.set_system_prompt(user_id, self.default_prompts.get(model, ""))
         self.db.create_conv_id(user_id)
         await message.reply("Системный промпт сброшен!")
+
+    async def set_temperature(self, message: Message):
+        await message.reply("Выберите температуру:", reply_markup=self.temperature_kb.as_markup())
+
+    async def set_temperature_button_handler(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        temperature = float(callback.data.split(":")[1])
+        self.db.set_parameters(user_id, self.default_params, temperature=temperature)
+        await self.bot.send_message(chat_id=user_id, text=f"Новая температура задана:\n\n{temperature}")
+
+    async def set_top_p(self, message: Message):
+        await message.reply("Выберите top-p:", reply_markup=self.top_p_kb.as_markup())
+
+    async def set_top_p_button_handler(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        top_p = float(callback.data.split(":")[1])
+        self.db.set_parameters(user_id, self.default_params, top_p=top_p)
+        await self.bot.send_message(chat_id=user_id, text=f"Новое top-p задано:\n\n{top_p}")
+
+    async def get_params(self, message: Message):
+        user_id = message.from_user.id
+        params = self.db.get_parameters(user_id, self.default_params)
+        await message.reply(f"Текущие параметры генерации: {json.dumps(params)}", parse_mode=None)
 
     async def get_model(self, message: Message):
         user_id = message.from_user.id
@@ -159,20 +202,24 @@ class LlmBot:
     async def generate(self, message: Message):
         user_id = message.from_user.id
         model = self.db.get_current_model(user_id)
-        if model == "gpt-4o":
-            count = self.db.count_user_messages(user_id)
-            if count > self.user_message_limit:
-                await message.answer("Вы превысили лимит запросов по gpt-4o, переключите модель на другую с помощью /setmodel")
-                return
-
         if model not in self.clients:
             await message.answer("Выбранная модель больше не поддерживается, переключите на другую с помощью /setmodel")
+            return
+
+        count = self.db.count_user_messages(user_id, model)
+        print(user_id, model, count)
+        if count > self.limits[model]:
+            await message.answer(f"Вы превысили лимит запросов по {model}, переключите модель на другую с помощью /setmodel")
+            return
+
+        params = self.db.get_parameters(user_id, self.default_params)
+        if "claude" in model and params["temperature"] > 1.0:
+            await message.answer("Claude не поддерживает температуру выше 1, задайте новую с помощью /settemperature")
             return
 
         conv_id = self.db.get_current_conv_id(user_id)
         history = self.db.fetch_conversation(conv_id)
         system_prompt = self.db.get_system_prompt(user_id, self.default_prompts)
-        params = self.default_params[model]
 
         content = await self._build_content(message)
         if not isinstance(content, str) and not self.can_handle_images[model]:
@@ -194,23 +241,13 @@ class LlmBot:
                 **params
             )
 
-            builder = InlineKeyboardBuilder()
-            builder.add(InlineKeyboardButton(
-                text="👍",
-                callback_data="feedback:like"
-            ))
-            builder.add(InlineKeyboardButton(
-                text="👎",
-                callback_data="feedback:dislike"
-            ))
-            markup = builder.as_markup()
-
             chunk_size = self.chunk_size
             answer_parts = [answer[i:i + chunk_size] for i in range(0, len(answer), chunk_size)]
-
             new_message = await placeholder.edit_text(answer_parts[0], parse_mode=None)
             for part in answer_parts[1:]:
                 new_message = await message.answer(part, parse_mode=None)
+
+            markup = self.likes_kb.as_markup()
             new_message = await new_message.edit_text(answer_parts[-1], parse_mode=None, reply_markup=markup)
 
             self.db.save_assistant_message(
@@ -249,19 +286,27 @@ class LlmBot:
             await self.bot.send_message(chat_id=user_id, text=f"Некорректное имя модели. Выберите из: {model_list}")
 
     def _count_tokens(self, messages, model):
-        return 0
-        if "api.openai.com" in str(self.clients[model].base_url):
+        url = str(self.clients[model].base_url)
+        tokens_count = 0
+
+        if "api.openai.com" in url:
             encoding = tiktoken.encoding_for_model(self.model_names[model])
-            tokens_count = 0
             for m in messages:
                 if isinstance(m["content"], str):
                     tokens_count += len(encoding.encode(m["content"]))
                 else:
                     tokens_count += 1000
-        else:
-            tokenizer = Tokenizer.get(self.model_names[model])
-            tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-            tokens_count = len(tokens)
+            return tokens_count
+
+        if "anthropic" in url:
+            for m in messages:
+                if isinstance(m["content"], str):
+                    tokens_count += len(m["content"]) // 2
+            return tokens_count
+
+        tokenizer = Tokenizer.get(self.model_names[model])
+        tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+        tokens_count = len(tokens)
         return tokens_count
 
     @staticmethod
@@ -362,7 +407,6 @@ def main(
     db_path: str,
     history_max_tokens: int = 6144,
     chunk_size: int = 3500,
-    user_message_limit: int = 100
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
@@ -370,7 +414,6 @@ def main(
         db_path=db_path,
         history_max_tokens=history_max_tokens,
         chunk_size=chunk_size,
-        user_message_limit=user_message_limit
     )
     asyncio.run(bot.start_polling())
 

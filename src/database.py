@@ -1,5 +1,6 @@
 import secrets
 import json
+import copy
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData
@@ -10,6 +11,11 @@ Base = declarative_base()
 metadata = MetaData()
 
 DEFAULT_MODEL = "gpt-4o"
+DEFAULT_PARAMS = {
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "max_tokens": 1536,
+}
 
 
 class Messages(Base):
@@ -38,6 +44,14 @@ class SystemPrompts(Base):
     user_id = Column(Integer, nullable=False, index=True)
     model = Column(String, nullable=True, index=True)
     prompt = Column(Text, nullable=False)
+
+
+class GenerationParameters(Base):
+    __tablename__ = 'generation_parameters'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    model = Column(String, nullable=True, index=True)
+    parameters = Column(Text, nullable=False)
 
 
 class Models(Base):
@@ -159,6 +173,42 @@ class Database:
                 session.add(new_prompt)
             session.commit()
 
+    def set_parameters(self, user_id: int, default_params, **kwargs):
+        current_model = self.get_current_model(user_id)
+        params = self.get_parameters(user_id, default_params)
+        for key, value in kwargs.items():
+            params[key] = value
+        with self.Session() as session:
+            parameters = (
+                session.query(GenerationParameters)
+                .filter(GenerationParameters.user_id == user_id)
+                .filter(GenerationParameters.model == current_model)
+                .first()
+            )
+            if parameters:
+                parameters.parameters = json.dumps(params)
+            else:
+                parameters = GenerationParameters(
+                    user_id=user_id,
+                    model=current_model,
+                    parameters=json.dumps(params)
+                )
+                session.add(parameters)
+            session.commit()
+
+    def get_parameters(self, user_id: int, default_params):
+        current_model = self.get_current_model(user_id)
+        with self.Session() as session:
+            parameters = (
+                session.query(GenerationParameters)
+                .filter(GenerationParameters.user_id == user_id)
+                .filter(GenerationParameters.model == current_model)
+                .first()
+            )
+            if parameters:
+                return json.loads(parameters.parameters)
+            return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
+
     def save_user_message(self, content: str, conv_id: str):
         with self.Session() as session:
             new_message = Messages(
@@ -195,7 +245,7 @@ class Database:
             session.add(new_feedback)
             session.commit()
 
-    def count_user_messages(self, user_id):
+    def count_user_messages(self, user_id, model):
         with self.Session() as session:
             conv_ids = session.query(Conversations).filter(Conversations.user_id == user_id).all()
             if not conv_ids:
@@ -204,7 +254,7 @@ class Database:
             for conv in conv_ids:
                 messages = (
                     session.query(Messages)
-                    .filter(Messages.conv_id == conv.conv_id, Messages.role == "assistant", Messages.model == "gpt-4o")
+                    .filter(Messages.conv_id == conv.conv_id, Messages.role == "assistant", Messages.model == model)
                     .all()
                 )
                 count += len(messages)
