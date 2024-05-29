@@ -21,6 +21,13 @@ from src.database import Database
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
+DEFAULT_PARAMS = {
+    "temperature": 0.6,
+    "top_p": 0.9,
+    "max_tokens": 1536,
+}
+
+
 class Tokenizer:
     tokenizers = dict()
 
@@ -37,9 +44,6 @@ class LlmBot:
         bot_token: str,
         client_config_path: str,
         db_path: str,
-        temperature: float,
-        top_p: float,
-        max_tokens: int,
         history_max_tokens: int,
         chunk_size: int,
         user_message_limit: int
@@ -51,10 +55,12 @@ class LlmBot:
         self.model_names = dict()
         self.can_handle_images = dict()
         self.default_prompts = dict()
+        self.default_params = dict()
         for model_name, config in client_config.items():
             self.model_names[model_name] = config.pop("model_name")
             self.can_handle_images[model_name] = config.pop("can_handle_images", False)
             self.default_prompts[model_name] = config.pop("system_prompt", "")
+            self.default_params[model_name] = config.pop("params", DEFAULT_PARAMS)
             self.clients[model_name] = AsyncOpenAI(**config)
         assert self.clients
         assert self.model_names
@@ -63,9 +69,6 @@ class LlmBot:
         self.user_message_limit = user_message_limit
 
         # Параметры
-        self.temperature = temperature
-        self.top_p = top_p
-        self.max_tokens = max_tokens
         self.history_max_tokens = history_max_tokens
 
         # База
@@ -74,7 +77,7 @@ class LlmBot:
         # Клавиатуры
         self.inline_models_list_kb = InlineKeyboardBuilder()
         for model_id in self.clients.keys():
-            self.inline_models_list_kb.add(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
+            self.inline_models_list_kb.row(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
 
         # Бот
         self.chunk_size = chunk_size
@@ -169,6 +172,7 @@ class LlmBot:
         conv_id = self.db.get_current_conv_id(user_id)
         history = self.db.fetch_conversation(conv_id)
         system_prompt = self.db.get_system_prompt(user_id, self.default_prompts)
+        params = self.default_params[model]
 
         content = await self._build_content(message)
         if not isinstance(content, str) and not self.can_handle_images[model]:
@@ -186,7 +190,8 @@ class LlmBot:
                 model=model,
                 history=history,
                 user_content=content,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                **params
             )
 
             builder = InlineKeyboardBuilder()
@@ -244,6 +249,7 @@ class LlmBot:
             await self.bot.send_message(chat_id=user_id, text=f"Некорректное имя модели. Выберите из: {model_list}")
 
     def _count_tokens(self, messages, model):
+        return 0
         if "api.openai.com" in str(self.clients[model].base_url):
             encoding = tiktoken.encoding_for_model(self.model_names[model])
             tokens_count = 0
@@ -280,7 +286,7 @@ class LlmBot:
             return content.replace("\n", " ")[:40]
         return "Not text"
 
-    async def _query_api(self, model, history, user_content, system_prompt: str):
+    async def _query_api(self, model, history, user_content, system_prompt: str, **kwargs):
         messages = history + [{"role": "user", "content": user_content}]
         messages = self._merge_messages(messages)
         assert messages
@@ -291,16 +297,14 @@ class LlmBot:
             tokens_count = self._count_tokens(messages, model=model)
 
         assert messages
-        if messages[0]["role"] != "system":
+        if messages[0]["role"] != "system" and system_prompt.strip():
             messages.insert(0, {"role": "system", "content": system_prompt})
 
         print(model, "####", len(messages), "####", self._crop_content(messages[-1]["content"]))
         chat_completion = await self.clients[model].chat.completions.create(
             model=self.model_names[model],
             messages=messages,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            max_tokens=self.max_tokens
+            **kwargs
         )
         answer = chat_completion.choices[0].message.content
         print(
@@ -356,9 +360,6 @@ def main(
     bot_token: str,
     client_config_path: str,
     db_path: str,
-    temperature: float = 0.6,
-    top_p: float = 0.9,
-    max_tokens: int = 1536,
     history_max_tokens: int = 6144,
     chunk_size: int = 3500,
     user_message_limit: int = 100
@@ -367,9 +368,6 @@ def main(
         bot_token=bot_token,
         client_config_path=client_config_path,
         db_path=db_path,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
         history_max_tokens=history_max_tokens,
         chunk_size=chunk_size,
         user_message_limit=user_message_limit

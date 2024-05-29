@@ -19,7 +19,7 @@ def merge_messages(messages):
     return new_messages
 
 
-def main(db_path, output_path):
+def main(db_path: str, output_path: str, min_timestamp: int = None):
     db = Database(db_path)
     conversations = set(db.get_all_conv_ids())
     records = []
@@ -28,6 +28,12 @@ def main(db_path, output_path):
         messages = db.fetch_conversation(conv_id, include_meta=True)
         models = {m.get("model") for m in messages}
         system_prompts = {m.get("system_prompt") for m in messages}
+        timestamps = {m.get("timestamp", None) for m in messages}
+        if min_timestamp:
+            if not timestamps:
+                continue
+            if min_timestamp > min(timestamps):
+                continue
         if None in models:
             models.remove(None)
         if None in system_prompts:

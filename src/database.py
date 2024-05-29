@@ -105,6 +105,7 @@ class Database:
                 if include_meta:
                     message["model"] = m.model
                     message["system_prompt"] = m.system_prompt
+                    message["timestamp"] = m.timestamp
                 clean_messages.append(message)
             return clean_messages
 
