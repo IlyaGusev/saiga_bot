@@ -23,6 +23,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 DEFAULT_MESSAGE_COUNT_LIMIT = 10000
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
+BOT_NAMES = ("Сайга", "@saiga_igusev_bot", "@saiga_igusev_test_bot")
+
 
 class Tokenizer:
     tokenizers = dict()
@@ -41,7 +43,7 @@ class LlmBot:
         client_config_path: str,
         db_path: str,
         history_max_tokens: int,
-        chunk_size: int
+        chunk_size: int,
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -97,6 +99,7 @@ class LlmBot:
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
         self.dp = Dispatcher()
+
         self.dp.message.register(self.start, Command("start"))
         self.dp.message.register(self.reset, Command("reset"))
         self.dp.message.register(self.history, Command("history"))
@@ -110,6 +113,7 @@ class LlmBot:
         self.dp.message.register(self.set_temperature, Command("settemperature"))
         self.dp.message.register(self.set_top_p, Command("settopp"))
         self.dp.message.register(self.generate)
+
         self.dp.callback_query.register(self.save_feedback, F.data.startswith("feedback:"))
         self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith("setmodel:"))
         self.dp.callback_query.register(self.set_temperature_button_handler, F.data.startswith("settemperature:"))
@@ -119,8 +123,8 @@ class LlmBot:
         await self.dp.start_polling(self.bot)
 
     async def start(self, message: Message):
-        user_id = message.from_user.id
-        self.db.create_conv_id(user_id)
+        chat_id = message.chat.id
+        self.db.create_conv_id(chat_id)
         await message.reply("Привет! Как тебе помочь?")
 
     async def get_count(self, message: Message) -> int:
@@ -130,78 +134,108 @@ class LlmBot:
         await message.reply("Осталось запросов к {}: {}".format(model, self.limits[model] - count))
 
     async def set_system(self, message: Message):
-        user_id = message.from_user.id
+        chat_id = message.chat.id
         text = message.text.replace("/setsystem", "").strip()
-        self.db.set_system_prompt(user_id, text)
-        self.db.create_conv_id(user_id)
+        self.db.set_system_prompt(chat_id, text)
+        self.db.create_conv_id(chat_id)
         await message.reply(f"Новый системный промпт задан:\n\n{text}")
 
     async def get_system(self, message: Message):
-        user_id = message.from_user.id
-        prompt = self.db.get_system_prompt(user_id, self.default_prompts)
+        chat_id = message.chat.id
+        prompt = self.db.get_system_prompt(chat_id, self.default_prompts)
         if prompt.strip():
             await message.reply(prompt)
         else:
             await message.reply("Системный промпт пуст")
 
     async def reset_system(self, message: Message):
-        user_id = message.from_user.id
-        model = self.db.get_current_model(user_id)
-        self.db.set_system_prompt(user_id, self.default_prompts.get(model, ""))
-        self.db.create_conv_id(user_id)
+        chat_id = message.chat.id
+        model = self.db.get_current_model(chat_id)
+        self.db.set_system_prompt(chat_id, self.default_prompts.get(model, ""))
+        self.db.create_conv_id(chat_id)
         await message.reply("Системный промпт сброшен!")
 
     async def set_temperature(self, message: Message):
         await message.reply("Выберите температуру:", reply_markup=self.temperature_kb.as_markup())
 
     async def set_temperature_button_handler(self, callback: CallbackQuery):
-        user_id = callback.from_user.id
+        chat_id = callback.message.chat.id
         temperature = float(callback.data.split(":")[1])
-        self.db.set_parameters(user_id, self.default_params, temperature=temperature)
-        await self.bot.send_message(chat_id=user_id, text=f"Новая температура задана:\n\n{temperature}")
+        self.db.set_parameters(chat_id, self.default_params, temperature=temperature)
+        await self.bot.send_message(chat_id=chat_id, text=f"Новая температура задана:\n\n{temperature}")
 
     async def set_top_p(self, message: Message):
         await message.reply("Выберите top-p:", reply_markup=self.top_p_kb.as_markup())
 
     async def set_top_p_button_handler(self, callback: CallbackQuery):
-        user_id = callback.from_user.id
+        chat_id = callback.message.chat.id
         top_p = float(callback.data.split(":")[1])
-        self.db.set_parameters(user_id, self.default_params, top_p=top_p)
-        await self.bot.send_message(chat_id=user_id, text=f"Новое top-p задано:\n\n{top_p}")
+        self.db.set_parameters(chat_id, self.default_params, top_p=top_p)
+        await self.bot.send_message(chat_id=chat_id, text=f"Новое top-p задано:\n\n{top_p}")
 
     async def get_params(self, message: Message):
-        user_id = message.from_user.id
-        params = self.db.get_parameters(user_id, self.default_params)
+        chat_id = message.chat.id
+        params = self.db.get_parameters(chat_id, self.default_params)
         await message.reply(f"Текущие параметры генерации: {json.dumps(params)}", parse_mode=None)
 
     async def get_model(self, message: Message):
-        user_id = message.from_user.id
-        model = self.db.get_current_model(user_id)
+        chat_id = message.chat.id
+        model = self.db.get_current_model(chat_id)
         await message.reply(model)
 
     async def set_model(self, message: Message):
         await message.reply("Выберите модель:", reply_markup=self.inline_models_list_kb.as_markup())
 
     async def reset(self, message: Message):
-        user_id = message.from_user.id
-        self.db.create_conv_id(user_id)
+        chat_id = message.chat.id
+        self.db.create_conv_id(chat_id)
         await message.reply("История сообщений сброшена!")
 
     async def history(self, message: Message):
-        user_id = message.from_user.id
-        conv_id = self.db.get_current_conv_id(user_id)
-        history = self.db.fetch_conversation(conv_id)
+        chat_id = message.chat.id
+        is_chat = chat_id != message.from_user.id
+        conv_id = self.db.get_current_conv_id(chat_id)
+        history = self.db.fetch_conversation(conv_id, is_chat=is_chat)
         for m in history:
             if not isinstance(m["content"], str):
                 m["content"] = "Not text"
+        history = self._merge_messages(history)
         history = json.dumps(history, ensure_ascii=False)
         if len(history) > self.chunk_size:
             history = history[:self.chunk_size] + "... truncated"
         await message.reply(history, parse_mode=None)
 
+    def get_user_name(self, message: Message):
+        return message.from_user.full_name if message.from_user.full_name else message.from_user.username
+
+    async def save_chat_message(self, message: Message):
+        if message.chat.type not in ("group", "supergroup"):
+            return
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        user_name = self.get_user_name(message)
+        content = await self._build_content(message)
+        if content is None:
+            return
+        conv_id = self.db.get_current_conv_id(chat_id)
+        self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
+
     async def generate(self, message: Message):
         user_id = message.from_user.id
-        model = self.db.get_current_model(user_id)
+        user_name = self.get_user_name(message)
+        chat_id = user_id
+        is_chat = False
+        if message.chat.type in ("group", "supergroup"):
+            bot_info = await self.bot.get_me()
+            is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
+            is_explicit = message.text and any(bot_name in message.text for bot_name in BOT_NAMES)
+            if not is_reply and not is_explicit:
+                await self.save_chat_message(message)
+                return
+            chat_id = message.chat.id
+            is_chat = True
+
+        model = self.db.get_current_model(chat_id)
         if model not in self.clients:
             await message.answer("Выбранная модель больше не поддерживается, переключите на другую с помощью /setmodel")
             return
@@ -212,14 +246,14 @@ class LlmBot:
             await message.answer(f"Вы превысили лимит запросов по {model}, переключите модель на другую с помощью /setmodel")
             return
 
-        params = self.db.get_parameters(user_id, self.default_params)
+        params = self.db.get_parameters(chat_id, self.default_params)
         if "claude" in model and params["temperature"] > 1.0:
             await message.answer("Claude не поддерживает температуру выше 1, задайте новую с помощью /settemperature")
             return
 
-        conv_id = self.db.get_current_conv_id(user_id)
-        history = self.db.fetch_conversation(conv_id)
-        system_prompt = self.db.get_system_prompt(user_id, self.default_prompts)
+        conv_id = self.db.get_current_conv_id(chat_id)
+        history = self.db.fetch_conversation(conv_id, is_chat=is_chat)
+        system_prompt = self.db.get_system_prompt(chat_id, self.default_prompts)
 
         content = await self._build_content(message)
         if not isinstance(content, str) and not self.can_handle_images[model]:
@@ -229,7 +263,7 @@ class LlmBot:
             await message.answer("Такой тип сообщений (ещё) не поддерживается")
             return
 
-        self.db.save_user_message(content, conv_id=conv_id)
+        self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
         placeholder = await message.answer("💬")
 
         try:
@@ -274,16 +308,16 @@ class LlmBot:
         )
 
     async def set_model_button_handler(self, callback: CallbackQuery):
-        user_id = callback.from_user.id
+        chat_id = callback.message.chat.id
         model_name = callback.data.split(":")[1]
         assert model_name in self.clients
         if model_name in self.clients:
-            self.db.set_current_model(user_id, model_name)
-            self.db.create_conv_id(user_id)
-            await self.bot.send_message(chat_id=user_id, text=f"Новая модель задана:\n\n{model_name}")
+            self.db.set_current_model(chat_id, model_name)
+            self.db.create_conv_id(chat_id)
+            await self.bot.send_message(chat_id=chat_id, text=f"Новая модель задана:\n\n{model_name}")
         else:
             model_list = list(self.clients.keys())
-            await self.bot.send_message(chat_id=user_id, text=f"Некорректное имя модели. Выберите из: {model_list}")
+            await self.bot.send_message(chat_id=chat_id, text=f"Некорректное имя модели. Выберите из: {model_list}")
 
     def _count_tokens(self, messages, model):
         url = str(self.clients[model].base_url)
@@ -314,15 +348,17 @@ class LlmBot:
         new_messages = []
         prev_role = None
         for m in messages:
-            if m["content"] is None:
+            content = m["content"]
+            role = m["role"]
+            if content is None:
                 continue
-            if m["role"] == prev_role:
-                is_current_str = isinstance(m["content"], str)
+            if role == prev_role:
+                is_current_str = isinstance(content, str)
                 is_prev_str = isinstance(new_messages[-1]["content"], str)
                 if is_current_str and is_prev_str:
-                    new_messages[-1]["content"] += "\n" + m["content"]
+                    new_messages[-1]["content"] += "\n\n" + content
                     continue
-            prev_role = m["role"]
+            prev_role = role
             new_messages.append(m)
         return new_messages
 

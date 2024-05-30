@@ -22,6 +22,8 @@ class Messages(Base):
     __tablename__ = 'messages'
     id = Column(Integer, primary_key=True)
     role = Column(String, nullable=False)
+    user_id = Column(Integer, nullable=True)
+    user_name = Column(String, nullable=True)
     content = Column(Text, nullable=False)
     conv_id = Column(String, nullable=False, index=True)
     timestamp = Column(Integer, nullable=False)
@@ -100,7 +102,7 @@ class Database:
                 return self.create_conv_id(user_id)
             return conv.conv_id
 
-    def fetch_conversation(self, conv_id, include_meta: bool = False):
+    def fetch_conversation(self, conv_id, include_meta: bool = False, is_chat: bool = False):
         with self.Session() as session:
             messages = (
                 session.query(Messages)
@@ -116,6 +118,8 @@ class Database:
                     "role": m.role,
                     "content": self._parse_content(m.content)
                 }
+                if is_chat and isinstance(message["content"], str) and m.user_name:
+                    message["content"] = "{}: {}".format(m.user_name, message["content"])
                 if include_meta:
                     message["model"] = m.model
                     message["system_prompt"] = m.system_prompt
@@ -209,12 +213,14 @@ class Database:
                 return json.loads(parameters.parameters)
             return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
 
-    def save_user_message(self, content: str, conv_id: str):
+    def save_user_message(self, content: str, conv_id: str, user_id: int, user_name: str = None):
         with self.Session() as session:
             new_message = Messages(
                 role="user",
                 content=self._serialize_content(content),
                 conv_id=conv_id,
+                user_id=user_id,
+                user_name=user_name,
                 timestamp=self.get_current_ts()
             )
             session.add(new_message)
