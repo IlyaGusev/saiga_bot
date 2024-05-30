@@ -24,6 +24,7 @@ DEFAULT_MESSAGE_COUNT_LIMIT = 10000
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 BOT_NAMES = ("Сайга", "@saiga_igusev_bot", "@saiga_igusev_test_bot")
+BOT_TAGS = ("@saiga_igusev_bot", "@saiga_igusev_test_bot")
 
 
 class Tokenizer:
@@ -399,7 +400,10 @@ class LlmBot:
     async def _build_content(self, message: Message):
         content_type = message.content_type
         if content_type == "text":
-            return message.text
+            text = message.text
+            for tag in BOT_TAGS:
+                text = text.replace(tag, "ассистент,").strip()
+            return text
 
         photo = None
         photo_ext = (".jpg", "jpeg", ".png", ".webp", ".gif")
