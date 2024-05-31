@@ -3,6 +3,7 @@ import os
 import json
 import traceback
 import base64
+from functools import wraps
 
 import fire
 import tiktoken
@@ -35,6 +36,34 @@ class Tokenizer:
         if model_name not in cls.tokenizers:
             cls.tokenizers[model_name] = AutoTokenizer.from_pretrained(model_name)
         return cls.tokenizers[model_name]
+
+
+def check_admin(func):
+    @wraps(func)
+    async def wrapped(self, obj, *args, **kwargs):
+        if isinstance(obj, CallbackQuery):
+            chat_id = obj.message.chat.id
+            user_id = obj.from_user.id
+            user = obj.from_user
+        elif isinstance(obj, Message):
+            chat_id = obj.chat.id
+            user_id = obj.from_user.id
+            user = obj.from_user
+        else:
+            return await func(self, obj, *args, **kwargs)
+
+        if chat_id != user_id:
+            user_name = self.get_user_name(user)
+            is_admin = await self.is_admin(user_id=user_id, chat_id=chat_id)
+            if not is_admin:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"{user_name}, только админы могут это делать",
+                    parse_mode=None
+                )
+                return
+        return await func(self, obj, *args, **kwargs)
+    return wrapped
 
 
 class LlmBot:
@@ -156,23 +185,29 @@ class LlmBot:
         self.db.create_conv_id(chat_id)
         await message.reply("Системный промпт сброшен!")
 
+    @check_admin
     async def set_temperature(self, message: Message):
         await message.reply("Выберите температуру:", reply_markup=self.temperature_kb.as_markup())
 
+    @check_admin
     async def set_temperature_button_handler(self, callback: CallbackQuery):
         chat_id = callback.message.chat.id
         temperature = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, temperature=temperature)
         await self.bot.send_message(chat_id=chat_id, text=f"Новая температура задана:\n\n{temperature}")
+        await self.bot.delete_message(chat_id, callback.message.message_id)
 
+    @check_admin
     async def set_top_p(self, message: Message):
         await message.reply("Выберите top-p:", reply_markup=self.top_p_kb.as_markup())
 
+    @check_admin
     async def set_top_p_button_handler(self, callback: CallbackQuery):
         chat_id = callback.message.chat.id
         top_p = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, top_p=top_p)
         await self.bot.send_message(chat_id=chat_id, text=f"Новое top-p задано:\n\n{top_p}")
+        await self.bot.delete_message(chat_id, callback.message.message_id)
 
     async def get_params(self, message: Message):
         chat_id = message.chat.id
@@ -184,6 +219,7 @@ class LlmBot:
         model = self.db.get_current_model(chat_id)
         await message.reply(model)
 
+    @check_admin
     async def set_model(self, message: Message):
         await message.reply("Выберите модель:", reply_markup=self.inline_models_list_kb.as_markup())
 
@@ -308,16 +344,9 @@ class LlmBot:
             reply_markup=None
         )
 
+    @check_admin
     async def set_model_button_handler(self, callback: CallbackQuery):
         chat_id = callback.message.chat.id
-        user_id = callback.from_user.id
-        if chat_id != user_id:
-            user_name = self.get_user_name(callback.from_user)
-            is_admin = await self.is_admin(user_id=user_id, chat_id=chat_id)
-            if not is_admin:
-                await self.bot.send_message(chat_id=chat_id, text=f"{user_name}, только админы могут менять модель")
-                return
-
         model_name = callback.data.split(":")[1]
         assert model_name in self.clients
         if model_name in self.clients:
@@ -327,6 +356,8 @@ class LlmBot:
         else:
             model_list = list(self.clients.keys())
             await self.bot.send_message(chat_id=chat_id, text=f"Некорректное имя модели. Выберите из: {model_list}")
+
+        await self.bot.delete_message(chat_id, callback.message.message_id)
 
     def _count_tokens(self, messages, model):
         url = str(self.clients[model].base_url)
