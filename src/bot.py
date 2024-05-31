@@ -8,7 +8,7 @@ import fire
 import tiktoken
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -206,15 +206,15 @@ class LlmBot:
             history = history[:self.chunk_size] + "... truncated"
         await message.reply(history, parse_mode=None)
 
-    def get_user_name(self, message: Message):
-        return message.from_user.full_name if message.from_user.full_name else message.from_user.username
+    def get_user_name(self, user):
+        return user.full_name if user.full_name else user.username
 
     async def save_chat_message(self, message: Message):
         if message.chat.type not in ("group", "supergroup"):
             return
         chat_id = message.chat.id
         user_id = message.from_user.id
-        user_name = self.get_user_name(message)
+        user_name = self.get_user_name(message.from_user)
         content = await self._build_content(message)
         if content is None:
             return
@@ -223,7 +223,7 @@ class LlmBot:
 
     async def generate(self, message: Message):
         user_id = message.from_user.id
-        user_name = self.get_user_name(message)
+        user_name = self.get_user_name(message.from_user)
         chat_id = user_id
         is_chat = False
         if message.chat.type in ("group", "supergroup"):
@@ -310,6 +310,14 @@ class LlmBot:
 
     async def set_model_button_handler(self, callback: CallbackQuery):
         chat_id = callback.message.chat.id
+        user_id = callback.from_user.id
+        if chat_id != user_id:
+            user_name = self.get_user_name(callback.from_user)
+            is_admin = await self.is_admin(user_id=user_id, chat_id=chat_id)
+            if not is_admin:
+                await self.bot.send_message(chat_id=chat_id, text=f"{user_name}, только админы могут менять модель")
+                return
+
         model_name = callback.data.split(":")[1]
         assert model_name in self.clients
         if model_name in self.clients:
@@ -344,6 +352,10 @@ class LlmBot:
         tokens_count = len(tokens)
         return tokens_count
 
+    async def is_admin(self, user_id, chat_id):
+        chat_member = await self.bot.get_chat_member(chat_id, user_id)
+        return chat_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
+
     @staticmethod
     def _merge_messages(messages):
         new_messages = []
@@ -372,6 +384,8 @@ class LlmBot:
         messages = history + [{"role": "user", "content": user_content}]
         messages = self._merge_messages(messages)
         assert messages
+
+        messages = [m for m in messages if isinstance(m["content"], str) or self.can_handle_images[model]]
 
         tokens_count = self._count_tokens(messages, model=model)
         while tokens_count > self.history_max_tokens and len(messages) >= 3:
