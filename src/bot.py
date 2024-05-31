@@ -127,7 +127,7 @@ class LlmBot:
             self.top_p_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settopp:{value}"))
 
         # Бот
-        self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+        self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
         self.dp = Dispatcher()
 
         self.dp.message.register(self.start, Command("start"))
