@@ -73,6 +73,7 @@ class LlmBot:
         db_path: str,
         history_max_tokens: int,
         chunk_size: int,
+        characters_path: str
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -97,6 +98,12 @@ class LlmBot:
         assert self.model_names
         assert self.default_prompts
 
+        # Персонажи
+        self.characters = dict()
+        if characters_path and os.path.exists(characters_path):
+            with open(characters_path) as r:
+                self.characters = json.load(r)
+
         # Параметры
         self.history_max_tokens = history_max_tokens
         self.chunk_size = chunk_size
@@ -105,11 +112,19 @@ class LlmBot:
         self.db = Database(db_path)
 
         # Клавиатуры
-        self.inline_models_list_kb = InlineKeyboardBuilder()
+        self.models_kb = InlineKeyboardBuilder()
         for model_id in self.clients.keys():
-            self.inline_models_list_kb.row(
+            self.models_kb.row(
                 InlineKeyboardButton(
                     text=model_id, callback_data=f"setmodel:{model_id}"
+                )
+            )
+
+        self.characters_kb = InlineKeyboardBuilder()
+        for char_id in self.characters.keys():
+            self.characters_kb.row(
+                InlineKeyboardButton(
+                    text=char_id, callback_data=f"setcharacter:{char_id}"
                 )
             )
 
@@ -149,6 +164,7 @@ class LlmBot:
         self.dp.message.register(self.get_model, Command("getmodel"))
         self.dp.message.register(self.set_short_name, Command("setshortname"))
         self.dp.message.register(self.get_short_name, Command("getshortname"))
+        self.dp.message.register(self.set_character, Command("setcharacter"))
         self.dp.message.register(self.get_count, Command("getcount"))
         self.dp.message.register(self.get_params, Command("getparams"))
         self.dp.message.register(self.set_temperature, Command("settemperature"))
@@ -160,6 +176,9 @@ class LlmBot:
         )
         self.dp.callback_query.register(
             self.set_model_button_handler, F.data.startswith("setmodel:")
+        )
+        self.dp.callback_query.register(
+            self.set_character_button_handler, F.data.startswith("setcharacter:")
         )
         self.dp.callback_query.register(
             self.set_temperature_button_handler, F.data.startswith("settemperature:")
@@ -272,8 +291,30 @@ class LlmBot:
     @check_admin
     async def set_model(self, message: Message):
         await message.reply(
-            "Выберите модель:", reply_markup=self.inline_models_list_kb.as_markup()
+            "Выберите модель:", reply_markup=self.models_kb.as_markup()
         )
+
+    @check_admin
+    async def set_character(self, message: Message):
+        await message.reply(
+            "Выберите персонажа:", reply_markup=self.characters_kb.as_markup()
+        )
+
+    @check_admin
+    async def set_character_button_handler(self, callback: CallbackQuery):
+        chat_id = callback.message.chat.id
+        char_name = callback.data.split(":")[1]
+        assert char_name in self.characters
+        character = self.characters[char_name]
+        system_prompt = character["system_prompt"]
+        self.db.set_system_prompt(chat_id, system_prompt)
+        short_name = character["short_name"]
+        self.db.set_short_name(chat_id, short_name)
+        self.db.create_conv_id(chat_id)
+        await self.bot.send_message(
+            chat_id=chat_id, text=f"Новая персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{short_name}'"
+        )
+        await self.bot.delete_message(chat_id, callback.message.message_id)
 
     async def reset(self, message: Message):
         chat_id = message.chat.id
@@ -425,19 +466,11 @@ class LlmBot:
         chat_id = callback.message.chat.id
         model_name = callback.data.split(":")[1]
         assert model_name in self.clients
-        if model_name in self.clients:
-            self.db.set_current_model(chat_id, model_name)
-            self.db.create_conv_id(chat_id)
-            await self.bot.send_message(
-                chat_id=chat_id, text=f"Новая модель задана:\n\n{model_name}"
-            )
-        else:
-            model_list = list(self.clients.keys())
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text=f"Некорректное имя модели. Выберите из: {model_list}",
-            )
-
+        self.db.set_current_model(chat_id, model_name)
+        self.db.create_conv_id(chat_id)
+        await self.bot.send_message(
+            chat_id=chat_id, text=f"Новая модель задана:\n\n{model_name}"
+        )
         await self.bot.delete_message(chat_id, callback.message.message_id)
 
     def _count_tokens(self, messages, model):
@@ -599,6 +632,7 @@ def main(
     db_path: str,
     history_max_tokens: int = 6144,
     chunk_size: int = 3500,
+    characters_path: str = None
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
@@ -606,6 +640,7 @@ def main(
         db_path=db_path,
         history_max_tokens=history_max_tokens,
         chunk_size=chunk_size,
+        characters_path=characters_path
     )
     asyncio.run(bot.start_polling())
 
