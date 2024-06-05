@@ -3,7 +3,7 @@ import json
 import copy
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData
+from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
@@ -259,15 +259,19 @@ class Database:
             if not conv_ids:
                 return 0
             count = 0
+            current_ts = self.get_current_ts()
             for conv in conv_ids:
-                messages = (
-                    session.query(Messages)
-                    .filter(Messages.conv_id == conv.conv_id, Messages.role == "assistant", Messages.model == model)
-                    .all()
+                count += (
+                    session.query(func.count(Messages.id))
+                    .filter(
+                        Messages.conv_id == conv.conv_id,
+                        Messages.role == "assistant",
+                        Messages.model == model,
+                        Messages.timestamp.isnot(None),
+                        Messages.timestamp > (current_ts - interval)
+                    )
+                    .scalar()
                 )
-                current_ts = self.get_current_ts()
-                messages = [m for m in messages if m.timestamp is not None and m.timestamp > current_ts - interval]
-                count += len(messages)
             return count
 
     def get_all_conv_ids(self):
