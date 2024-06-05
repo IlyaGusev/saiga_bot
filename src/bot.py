@@ -24,8 +24,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 DEFAULT_MESSAGE_COUNT_LIMIT = {"limit": 10000, "interval": 31536000}
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
-BOT_NAMES = ("Сайга", "@saiga_igusev_bot", "@saiga_igusev_test_bot")
-BOT_TAGS = ("@saiga_igusev_bot", "@saiga_igusev_test_bot")
 
 
 class Tokenizer:
@@ -139,8 +137,8 @@ class LlmBot:
 
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
+        self.bot_info = None
         self.dp = Dispatcher()
-
         self.dp.message.register(self.start, Command("start"))
         self.dp.message.register(self.reset, Command("reset"))
         self.dp.message.register(self.history, Command("history"))
@@ -149,6 +147,8 @@ class LlmBot:
         self.dp.message.register(self.reset_system, Command("resetsystem"))
         self.dp.message.register(self.set_model, Command("setmodel"))
         self.dp.message.register(self.get_model, Command("getmodel"))
+        self.dp.message.register(self.set_short_name, Command("setshortname"))
+        self.dp.message.register(self.get_short_name, Command("getshortname"))
         self.dp.message.register(self.get_count, Command("getcount"))
         self.dp.message.register(self.get_params, Command("getparams"))
         self.dp.message.register(self.set_temperature, Command("settemperature"))
@@ -169,6 +169,7 @@ class LlmBot:
         )
 
     async def start_polling(self):
+        self.bot_info = await self.bot.get_me()
         await self.dp.start_polling(self.bot)
 
     async def start(self, message: Message):
@@ -189,6 +190,7 @@ class LlmBot:
     async def set_system(self, message: Message):
         chat_id = message.chat.id
         text = message.text.replace("/setsystem", "").strip()
+        text = text.replace("@{}".format(self.bot_info.username), "").strip()
         self.db.set_system_prompt(chat_id, text)
         self.db.create_conv_id(chat_id)
         await message.reply(f"Новый системный промпт задан:\n\n{text}")
@@ -207,6 +209,23 @@ class LlmBot:
         self.db.set_system_prompt(chat_id, self.default_prompts.get(model, ""))
         self.db.create_conv_id(chat_id)
         await message.reply("Системный промпт сброшен!")
+
+    @check_admin
+    async def set_short_name(self, message: Message):
+        chat_id = message.chat.id
+        text = message.text.replace("/setshortname", "").strip()
+        text = text.replace("@{}".format(self.bot_info.username), "").strip()
+        if not text:
+            await message.reply("Короткое имя не может быть пустым. Напишите имя в одном сообщении с командой.")
+
+        self.db.set_short_name(chat_id, text)
+        self.db.create_conv_id(chat_id)
+        await message.reply(f"Новое короткое имя задано:\n\n{text}")
+
+    async def get_short_name(self, message: Message):
+        chat_id = message.chat.id
+        name = self.db.get_short_name(chat_id)
+        await message.reply(f"Короткое имя бота: {name}")
 
     @check_admin
     async def set_temperature(self, message: Message):
@@ -299,19 +318,19 @@ class LlmBot:
         chat_id = user_id
         is_chat = False
         if message.chat.type in ("group", "supergroup"):
-            bot_info = await self.bot.get_me()
+            chat_id = message.chat.id
+            is_chat = True
             is_reply = (
-                message.reply_to_message
-                and message.reply_to_message.from_user.id == bot_info.id
+                message.reply_to_message and message.reply_to_message.from_user.id == self.bot_info.id
             )
+            bot_short_name = self.db.get_short_name(chat_id)
+            bot_names = ["@" + self.bot_info.username, bot_short_name]
             is_explicit = message.text and any(
-                bot_name in message.text for bot_name in BOT_NAMES
+                bot_name in message.text for bot_name in bot_names
             )
             if not is_reply and not is_explicit:
                 await self.save_chat_message(message)
                 return
-            chat_id = message.chat.id
-            is_chat = True
 
         model = self.db.get_current_model(chat_id)
         if model not in self.clients:
@@ -367,7 +386,7 @@ class LlmBot:
 
             chunk_size = self.chunk_size
             answer_parts = [
-                answer[i : i + chunk_size] for i in range(0, len(answer), chunk_size)
+                answer[i: i + chunk_size] for i in range(0, len(answer), chunk_size)
             ]
             new_message = await placeholder.edit_text(answer_parts[0], parse_mode=None)
             for part in answer_parts[1:]:
@@ -536,8 +555,9 @@ class LlmBot:
         content_type = message.content_type
         if content_type == "text":
             text = message.text
-            for tag in BOT_TAGS:
-                text = text.replace(tag, "Ассистент").strip()
+            chat_id = message.chat.id
+            bot_short_name = self.db.get_short_name(chat_id)
+            text = text.replace("@" + self.bot_info.username, bot_short_name).strip()
             return text
 
         photo = None

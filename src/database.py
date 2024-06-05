@@ -10,6 +10,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 Base = declarative_base()
 metadata = MetaData()
 
+DEFAULT_SHORT_NAME = "Сайга"
 DEFAULT_MODEL = "saiga-v6"
 DEFAULT_PARAMS = {
     "temperature": 0.6,
@@ -54,6 +55,13 @@ class GenerationParameters(Base):
     user_id = Column(Integer, nullable=False, index=True)
     model = Column(String, nullable=True, index=True)
     parameters = Column(Text, nullable=False)
+
+
+class ShortNames(Base):
+    __tablename__ = "short_names"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    short_name = Column(String)
 
 
 class Models(Base):
@@ -176,6 +184,33 @@ class Database:
                 session.add(new_prompt)
             session.commit()
 
+    def get_short_name(self, user_id: int):
+        with self.Session() as session:
+            name = (
+                session.query(ShortNames)
+                .filter(ShortNames.user_id == user_id)
+                .first()
+            )
+            if name:
+                return name.short_name
+            return DEFAULT_SHORT_NAME
+
+    def set_short_name(self, user_id: int, text: str):
+        with self.Session() as session:
+            name = (
+                session.query(ShortNames)
+                .filter(ShortNames.user_id == user_id)
+                .first()
+            )
+            if name:
+                name.short_name = text
+            else:
+                new_name = ShortNames(
+                    user_id=user_id, short_name=text
+                )
+                session.add(new_name)
+            session.commit()
+
     def set_parameters(self, user_id: int, default_params, **kwargs):
         current_model = self.get_current_model(user_id)
         params = self.get_parameters(user_id, default_params)
@@ -260,19 +295,26 @@ class Database:
     def count_user_messages(self, user_id: int, model: str, interval: int):
         with self.Session() as session:
             conv_ids = (
-                session.query(Conversations)
+                session.query(Conversations.conv_id)
                 .filter(Conversations.user_id == user_id)
                 .all()
             )
+            additional_conv_ids = (
+                session.query(Messages.conv_id)
+                .filter(Messages.user_id == user_id)
+                .distinct()
+                .all()
+            )
+            conv_ids = {result[0] for result in conv_ids + additional_conv_ids}
             if not conv_ids:
                 return 0
             count = 0
             current_ts = self.get_current_ts()
-            for conv in conv_ids:
+            for conv_id in conv_ids:
                 count += (
                     session.query(func.count(Messages.id))
                     .filter(
-                        Messages.conv_id == conv.conv_id,
+                        Messages.conv_id == conv_id,
                         Messages.role == "assistant",
                         Messages.model == model,
                         Messages.timestamp.isnot(None),
