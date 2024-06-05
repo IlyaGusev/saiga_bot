@@ -25,7 +25,7 @@ def main(db_path: str, output_path: str, min_timestamp: int = None, fetch_chats:
     records = []
     first_messages = set()
     for conv_id in conversations:
-        messages = db.fetch_conversation(conv_id, include_meta=True)
+        messages = db.fetch_conversation(conv_id)
 
         timestamps = {m.get("timestamp", None) for m in messages}
         if not timestamps:
