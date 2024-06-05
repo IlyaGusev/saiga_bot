@@ -12,42 +12,64 @@ def merge_messages(messages):
         if m["content"] is None:
             continue
         if m["role"] == prev_role:
-            new_messages[-1]["content"] += "\n" + m["content"]
+            new_messages[-1]["content"] += "\n\n" + m["content"]
             continue
         prev_role = m["role"]
         new_messages.append(m)
     return new_messages
 
 
-def main(db_path: str, output_path: str, min_timestamp: int = None):
+def main(db_path: str, output_path: str, min_timestamp: int = None, fetch_chats: bool = False):
     db = Database(db_path)
     conversations = set(db.get_all_conv_ids())
     records = []
     first_messages = set()
     for conv_id in conversations:
         messages = db.fetch_conversation(conv_id, include_meta=True)
-        models = {m.get("model") for m in messages}
-        system_prompts = {m.get("system_prompt") for m in messages}
+
         timestamps = {m.get("timestamp", None) for m in messages}
-        if min_timestamp:
-            if not timestamps:
-                continue
-            if min_timestamp > min(timestamps):
-                continue
+        if not timestamps:
+            continue
+        if min_timestamp and min_timestamp > min(timestamps):
+            continue
+
+        user_ids = {m.get("user_id", None) for m in messages}
+        if None in user_ids:
+            user_ids.remove(None)
+        if not fetch_chats and len(user_ids) > 1:
+            continue
+        if fetch_chats and len(user_ids) <= 1:
+            continue
+
+        models = {m.get("model") for m in messages}
         if None in models:
             models.remove(None)
-        if None in system_prompts:
-            system_prompts.remove(None)
         if len(models) != 1:
             continue
+        model = list(models)[0]
+
+        system_prompts = {m.get("system_prompt") for m in messages}
+
+        if None in system_prompts:
+            system_prompts.remove(None)
         if len(system_prompts) != 1:
             continue
-        model = list(models)[0]
         system_prompt = list(system_prompts)[0]
-        messages = [{"role": m["role"], "content": m["content"]} for m in messages]
+
         if not all(isinstance(m["content"], str) for m in messages):
             continue
-        messages = merge_messages(messages)
+        if not fetch_chats:
+            messages = [{"role": m["role"], "content": m["content"]} for m in messages]
+            messages = merge_messages(messages)
+        else:
+            for message in messages:
+                if message["role"] != "user":
+                    continue
+                user_name = message["user_name"] if message["user_name"] else "Неизвестный"
+                message["content"] = "{}: {}".format(user_name, message["content"])
+            messages = [{"role": m["role"], "content": m["content"]} for m in messages]
+            messages = merge_messages(messages)
+
         if messages[0]["role"] != "user":
             continue
 
@@ -61,10 +83,10 @@ def main(db_path: str, output_path: str, min_timestamp: int = None):
 
         if system_prompt:
             messages.insert(0, {"role": "system", "content": system_prompt})
+        model_name = model.replace('-', '_')
         records.append({
             "messages": messages,
-            "model": model,
-            "source": "saiga_bot_gpt_4o",
+            "source": f"saiga_bot_v2_{model_name}",
             "conv_id": conv_id
         })
 

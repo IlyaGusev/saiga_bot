@@ -21,7 +21,10 @@ from src.database import Database
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-DEFAULT_MESSAGE_COUNT_LIMIT = 10000
+DEFAULT_MESSAGE_COUNT_LIMIT = {
+    "limit": 10000,
+    "interval": 31536000
+}
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 BOT_NAMES = ("Сайга", "@saiga_igusev_bot", "@saiga_igusev_test_bot")
@@ -160,8 +163,12 @@ class LlmBot:
     async def get_count(self, message: Message) -> int:
         user_id = message.from_user.id
         model = self.db.get_current_model(user_id)
-        count = self.db.count_user_messages(user_id, model)
-        await message.reply("Осталось запросов к {}: {}".format(model, self.limits[model] - count))
+        limit = self.limits[model]["limit"]
+        interval = self.limits[model]["interval"]
+        count = self.db.count_user_messages(user_id, model, interval)
+        remaining_count = limit - count
+        remaining_count = max(0, remaining_count)
+        await message.reply("Осталось запросов к {}: {}".format(model, remaining_count))
 
     async def set_system(self, message: Message):
         chat_id = message.chat.id
@@ -277,9 +284,12 @@ class LlmBot:
             await message.answer("Выбранная модель больше не поддерживается, переключите на другую с помощью /setmodel")
             return
 
-        count = self.db.count_user_messages(user_id, model)
+
+        limit = self.limits[model]["limit"]
+        interval = self.limits[model]["interval"]
+        count = self.db.count_user_messages(user_id, model, interval)
         print(user_id, model, count)
-        if count > self.limits[model]:
+        if count > limit:
             await message.answer(f"Вы превысили лимит запросов по {model}, переключите модель на другую с помощью /setmodel")
             return
 

@@ -10,7 +10,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 Base = declarative_base()
 metadata = MetaData()
 
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "saiga-v6"
 DEFAULT_PARAMS = {
     "temperature": 0.6,
     "top_p": 0.9,
@@ -124,6 +124,8 @@ class Database:
                     message["model"] = m.model
                     message["system_prompt"] = m.system_prompt
                     message["timestamp"] = m.timestamp
+                    message["user_id"] = m.user_id
+                    message["user_name"] = m.user_name
                 clean_messages.append(message)
             return clean_messages
 
@@ -251,7 +253,7 @@ class Database:
             session.add(new_feedback)
             session.commit()
 
-    def count_user_messages(self, user_id, model):
+    def count_user_messages(self, user_id: int, model: str, interval: int):
         with self.Session() as session:
             conv_ids = session.query(Conversations).filter(Conversations.user_id == user_id).all()
             if not conv_ids:
@@ -263,6 +265,8 @@ class Database:
                     .filter(Messages.conv_id == conv.conv_id, Messages.role == "assistant", Messages.model == model)
                     .all()
                 )
+                current_ts = self.get_current_ts()
+                messages = [m for m in messages if m.timestamp is not None and m.timestamp > current_ts - interval]
                 count += len(messages)
             return count
 
