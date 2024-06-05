@@ -198,7 +198,8 @@ class LlmBot:
 
     async def get_count(self, message: Message) -> int:
         user_id = message.from_user.id
-        model = self.db.get_current_model(user_id)
+        chat_id = message.chat.id
+        model = self.db.get_current_model(chat_id)
         limit = self.limits[model]["limit"]
         interval = self.limits[model]["interval"]
         count = self.db.count_user_messages(user_id, model, interval)
@@ -444,6 +445,7 @@ class LlmBot:
                 message_id=new_message.message_id,
                 model=model,
                 system_prompt=system_prompt,
+                reply_user_id=user_id
             )
 
         except Exception:

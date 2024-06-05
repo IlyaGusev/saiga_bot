@@ -25,6 +25,7 @@ class Messages(Base):
     role = Column(String, nullable=False)
     user_id = Column(Integer, nullable=True)
     user_name = Column(String, nullable=True)
+    reply_user_id = Column(Integer, nullable=True)
     content = Column(Text, nullable=False)
     conv_id = Column(String, nullable=False, index=True)
     timestamp = Column(Integer, nullable=False)
@@ -267,6 +268,7 @@ class Database:
         message_id: int,
         model: str,
         system_prompt: str,
+        reply_user_id: int
     ):
         with self.Session() as session:
             new_message = Messages(
@@ -277,6 +279,7 @@ class Database:
                 message_id=message_id,
                 model=model,
                 system_prompt=system_prompt,
+                reply_user_id=reply_user_id
             )
             session.add(new_message)
             session.commit()
@@ -294,34 +297,18 @@ class Database:
 
     def count_user_messages(self, user_id: int, model: str, interval: int):
         with self.Session() as session:
-            conv_ids = (
-                session.query(Conversations.conv_id)
-                .filter(Conversations.user_id == user_id)
-                .all()
-            )
-            additional_conv_ids = (
-                session.query(Messages.conv_id)
-                .filter(Messages.user_id == user_id)
-                .distinct()
-                .all()
-            )
-            conv_ids = {result[0] for result in conv_ids + additional_conv_ids}
-            if not conv_ids:
-                return 0
-            count = 0
             current_ts = self.get_current_ts()
-            for conv_id in conv_ids:
-                count += (
-                    session.query(func.count(Messages.id))
-                    .filter(
-                        Messages.conv_id == conv_id,
-                        Messages.role == "assistant",
-                        Messages.model == model,
-                        Messages.timestamp.isnot(None),
-                        Messages.timestamp > (current_ts - interval),
-                    )
-                    .scalar()
+            count = (
+                session.query(func.count(Messages.id))
+                .filter(
+                    Messages.reply_user_id == user_id,
+                    Messages.role == "assistant",
+                    Messages.model == model,
+                    Messages.timestamp.isnot(None),
+                    Messages.timestamp > (current_ts - interval),
                 )
+                .scalar()
+            )
             return count
 
     def get_all_conv_ids(self):
