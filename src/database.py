@@ -325,17 +325,22 @@ class Database:
             return count
 
     def is_subscribed_user(self, user_id: int):
+        remaining_time = self.get_subscription_info(user_id)
+        return remaining_time > 0
+
+    def get_subscription_info(self, user_id: int):
         with self.Session() as session:
-            conversations = (
+            subscriptions = (
                 session.query(Subscriptions).filter(Subscriptions.user_id == user_id)
             ).all()
-            if not conversations:
-                return False
+            if not subscriptions:
+                return 0
             until_timestamp = max(
-                conversations, key=lambda x: x.until_timestamp
+                subscriptions, key=lambda x: x.until_timestamp
             ).until_timestamp
             current_ts = self.get_current_ts()
-            return current_ts < until_timestamp
+            remaining_time = until_timestamp - self.get_current_ts()
+            return max(remaining_time, 0)
 
     def subscribe_user(self, user_id: int, duration: int):
         with self.Session() as session:
