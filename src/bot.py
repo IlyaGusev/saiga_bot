@@ -7,11 +7,19 @@ from functools import wraps
 
 import fire
 import tiktoken
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.types import (
+    PreCheckoutQuery,
+    SuccessfulPayment,
+    LabeledPrice,
+    Message,
+    InlineKeyboardButton,
+    CallbackQuery,
+    ContentType
+)
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer
@@ -174,6 +182,9 @@ class LlmBot:
         self.dp.message.register(self.get_params, Command("getparams"))
         self.dp.message.register(self.set_temperature, Command("settemperature"))
         self.dp.message.register(self.set_top_p, Command("settopp"))
+        self.dp.message.register(self.pay, Command("pay"))
+        self.dp.message.register(self.subscription_status, Command("substatus"))
+        self.dp.message.register(self.successful_payment_handler, lambda message: message.content_type == ContentType.SUCCESSFUL_PAYMENT)
         self.dp.message.register(self.generate)
 
         self.dp.callback_query.register(
@@ -191,6 +202,7 @@ class LlmBot:
         self.dp.callback_query.register(
             self.set_top_p_button_handler, F.data.startswith("settopp:")
         )
+        self.dp.pre_checkout_query.register(self.pre_checkout_handler)
 
     async def start_polling(self):
         self.bot_info = await self.bot.get_me()
@@ -634,8 +646,58 @@ class LlmBot:
                 }
             )
             return content
-
         return None
+
+    async def subscription_status(self, message: Message):
+        user_id = message.from_user.id
+        remaining_seconds = self.db.get_subscription_info(user_id)
+        await message.reply(f"Осталось {remaining_seconds} секунд подписки")
+
+    async def pay(self, message: Message):
+        user_id = message.from_user.id
+        remaining_seconds = self.db.get_subscription_info(user_id)
+        if remaining_seconds > 0:
+            await message.reply("Подписка уже оформлена!")
+            return
+
+        price = 1
+        title = "Подписка на месяц"
+
+        description = "Лимиты:"
+        for model, limit in self.limits.items():
+            if limit != DEFAULT_MESSAGE_COUNT_LIMIT:
+                limit = limit["subscribed"]
+                description += f"\n{model}: {limit['limit']} запросов каждые {limit['interval'] // 3600}ч"
+
+        await self.bot.send_invoice(
+            message.chat.id,
+            title=title,
+            description=description,
+            prices=[LabeledPrice(label=title, amount=price)],
+            provider_token="",
+            currency="XTR",
+            payload=str(user_id),
+            reply_to_message_id=message.message_id
+        )
+
+    async def pre_checkout_handler(self, pre_checkout_query: PreCheckoutQuery):
+        try:
+            await self.bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+        except Exception as e:
+            await self.bot.answer_pre_checkout_query(pre_checkout_query.id, ok=False, error_message=str(e))
+
+    async def successful_payment_handler(self, message: Message):
+        successful_payment: SuccessfulPayment = message.successful_payment
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        user_name = self.get_user_name(message.from_user)
+        assert successful_payment
+        payload = successful_payment.invoice_payload
+        charge_id = successful_payment.telegram_payment_charge_id
+        assert user_id == int(payload)
+        self.db.subscribe_user(user_id, 30  * 86400)
+        await self.bot.send_message(chat_id, f"Спасибо за оплату, {user_name}! Подписка на месяц оформлена!")
+
 
 
 def main(
