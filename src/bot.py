@@ -21,7 +21,10 @@ from src.database import Database
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-DEFAULT_MESSAGE_COUNT_LIMIT = {"limit": 10000, "interval": 31536000}
+DEFAULT_MESSAGE_COUNT_LIMIT = {
+    "standard": {"limit": 10000, "interval": 31536000},
+    "subscribed": {"limit": 100000, "interval": 31536000},
+}
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 
@@ -73,7 +76,7 @@ class LlmBot:
         db_path: str,
         history_max_tokens: int,
         chunk_size: int,
-        characters_path: str
+        characters_path: str,
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -93,6 +96,8 @@ class LlmBot:
             self.limits[model_name] = config.pop(
                 "message_count_limit", DEFAULT_MESSAGE_COUNT_LIMIT
             )
+            assert "standard" in self.limits[model_name]
+            assert "subscribed" in self.limits[model_name]
             self.clients[model_name] = AsyncOpenAI(**config)
         assert self.clients
         assert self.model_names
@@ -196,15 +201,20 @@ class LlmBot:
         self.db.create_conv_id(chat_id)
         await message.reply("Привет! Как тебе помочь?")
 
+    def count_remaining_messages(self, user_id: int, model: str):
+        is_subscribed = self.db.is_subscribed_user(user_id)
+        mode = "standard" if not is_subscribed else "subscribed"
+        limit = self.limits[model][mode]["limit"]
+        interval = self.limits[model][mode]["interval"]
+        count = self.db.count_user_messages(user_id, model, interval)
+        remaining_count = limit - count
+        return max(0, remaining_count)
+
     async def get_count(self, message: Message) -> int:
         user_id = message.from_user.id
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
-        limit = self.limits[model]["limit"]
-        interval = self.limits[model]["interval"]
-        count = self.db.count_user_messages(user_id, model, interval)
-        remaining_count = limit - count
-        remaining_count = max(0, remaining_count)
+        remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
         await message.reply("Осталось запросов к {}: {}".format(model, remaining_count))
 
     async def set_system(self, message: Message):
@@ -236,7 +246,9 @@ class LlmBot:
         text = message.text.replace("/setshortname", "").strip()
         text = text.replace("@{}".format(self.bot_info.username), "").strip()
         if not text:
-            await message.reply("Короткое имя не может быть пустым. Напишите имя в одном сообщении с командой.")
+            await message.reply(
+                "Короткое имя не может быть пустым. Напишите имя в одном сообщении с командой."
+            )
 
         self.db.set_short_name(chat_id, text)
         self.db.create_conv_id(chat_id)
@@ -291,9 +303,7 @@ class LlmBot:
 
     @check_admin
     async def set_model(self, message: Message):
-        await message.reply(
-            "Выберите модель:", reply_markup=self.models_kb.as_markup()
-        )
+        await message.reply("Выберите модель:", reply_markup=self.models_kb.as_markup())
 
     @check_admin
     async def set_character(self, message: Message):
@@ -313,7 +323,8 @@ class LlmBot:
         self.db.set_short_name(chat_id, short_name)
         self.db.create_conv_id(chat_id)
         await self.bot.send_message(
-            chat_id=chat_id, text=f"Новая персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{short_name}'"
+            chat_id=chat_id,
+            text=f"Новая персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{short_name}'",
         )
         await self.bot.delete_message(chat_id, callback.message.message_id)
 
@@ -363,7 +374,8 @@ class LlmBot:
             chat_id = message.chat.id
             is_chat = True
             is_reply = (
-                message.reply_to_message and message.reply_to_message.from_user.id == self.bot_info.id
+                message.reply_to_message
+                and message.reply_to_message.from_user.id == self.bot_info.id
             )
             bot_short_name = self.db.get_short_name(chat_id)
             bot_names = ["@" + self.bot_info.username, bot_short_name]
@@ -381,11 +393,9 @@ class LlmBot:
             )
             return
 
-        limit = self.limits[model]["limit"]
-        interval = self.limits[model]["interval"]
-        count = self.db.count_user_messages(user_id, model, interval)
-        print(user_id, model, count)
-        if count > limit:
+        remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
+        print(user_id, model, remaining_count)
+        if remaining_count <= 0:
             await message.reply(
                 f"Вы превысили лимит запросов по {model}, переключите модель на другую с помощью /setmodel"
             )
@@ -428,7 +438,7 @@ class LlmBot:
 
             chunk_size = self.chunk_size
             answer_parts = [
-                answer[i: i + chunk_size] for i in range(0, len(answer), chunk_size)
+                answer[i : i + chunk_size] for i in range(0, len(answer), chunk_size)
             ]
             new_message = await placeholder.edit_text(answer_parts[0], parse_mode=None)
             for part in answer_parts[1:]:
@@ -445,7 +455,7 @@ class LlmBot:
                 message_id=new_message.message_id,
                 model=model,
                 system_prompt=system_prompt,
-                reply_user_id=user_id
+                reply_user_id=user_id,
             )
 
         except Exception:
@@ -634,7 +644,7 @@ def main(
     db_path: str,
     history_max_tokens: int = 6144,
     chunk_size: int = 3500,
-    characters_path: str = None
+    characters_path: str = None,
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
@@ -642,7 +652,7 @@ def main(
         db_path=db_path,
         history_max_tokens=history_max_tokens,
         chunk_size=chunk_size,
-        characters_path=characters_path
+        characters_path=characters_path,
     )
     asyncio.run(bot.start_polling())
 

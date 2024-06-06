@@ -81,6 +81,14 @@ class Likes(Base):
     is_correct = Column(Integer, nullable=False)
 
 
+class Subscriptions(Base):
+    __tablename__ = "subscriptions"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    from_timestamp = Column(Integer, nullable=False)
+    until_timestamp = Column(Integer, nullable=False)
+
+
 class Database:
     def __init__(self, db_path: str):
         self.engine = create_engine(f"sqlite:///{db_path}")
@@ -137,6 +145,17 @@ class Database:
                 clean_messages.append(message)
             return clean_messages
 
+    def get_user_id(self, user_name):
+        with self.Session() as session:
+            user_ids = (
+                session.query(Messages.user_id)
+                .filter(Messages.user_name == user_name)
+                .distinct()
+                .all()
+            )
+            assert user_ids
+            return user_ids[0][0]
+
     def get_current_model(self, user_id):
         with self.Session() as session:
             model = session.query(Models).filter(Models.user_id == user_id).first()
@@ -188,9 +207,7 @@ class Database:
     def get_short_name(self, user_id: int):
         with self.Session() as session:
             name = (
-                session.query(ShortNames)
-                .filter(ShortNames.user_id == user_id)
-                .first()
+                session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
             )
             if name:
                 return name.short_name
@@ -199,16 +216,12 @@ class Database:
     def set_short_name(self, user_id: int, text: str):
         with self.Session() as session:
             name = (
-                session.query(ShortNames)
-                .filter(ShortNames.user_id == user_id)
-                .first()
+                session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
             )
             if name:
                 name.short_name = text
             else:
-                new_name = ShortNames(
-                    user_id=user_id, short_name=text
-                )
+                new_name = ShortNames(user_id=user_id, short_name=text)
                 session.add(new_name)
             session.commit()
 
@@ -268,7 +281,7 @@ class Database:
         message_id: int,
         model: str,
         system_prompt: str,
-        reply_user_id: int
+        reply_user_id: int,
     ):
         with self.Session() as session:
             new_message = Messages(
@@ -279,7 +292,7 @@ class Database:
                 message_id=message_id,
                 model=model,
                 system_prompt=system_prompt,
-                reply_user_id=reply_user_id
+                reply_user_id=reply_user_id,
             )
             session.add(new_message)
             session.commit()
@@ -310,6 +323,30 @@ class Database:
                 .scalar()
             )
             return count
+
+    def is_subscribed_user(self, user_id: int):
+        with self.Session() as session:
+            conversations = (
+                session.query(Subscriptions).filter(Subscriptions.user_id == user_id)
+            ).all()
+            if not conversations:
+                return False
+            until_timestamp = max(
+                conversations, key=lambda x: x.until_timestamp
+            ).until_timestamp
+            current_ts = self.get_current_ts()
+            return current_ts < until_timestamp
+
+    def subscribe_user(self, user_id: int, duration: int):
+        with self.Session() as session:
+            current_ts = self.get_current_ts()
+            new_subscription = Subscriptions(
+                user_id=user_id,
+                from_timestamp=current_ts,
+                until_timestamp=current_ts + duration,
+            )
+            session.add(new_subscription)
+            session.commit()
 
     def get_all_conv_ids(self):
         with self.Session() as session:
