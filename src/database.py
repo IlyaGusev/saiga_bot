@@ -102,9 +102,7 @@ class Database:
     def create_conv_id(self, user_id):
         conv_id = secrets.token_hex(nbytes=16)
         with self.Session() as session:
-            new_conv = Conversations(
-                user_id=user_id, conv_id=conv_id, timestamp=self.get_current_ts()
-            )
+            new_conv = Conversations(user_id=user_id, conv_id=conv_id, timestamp=self.get_current_ts())
             session.add(new_conv)
             session.commit()
         return conv_id
@@ -123,12 +121,7 @@ class Database:
 
     def fetch_conversation(self, conv_id):
         with self.Session() as session:
-            messages = (
-                session.query(Messages)
-                .filter(Messages.conv_id == conv_id)
-                .order_by(Messages.timestamp)
-                .all()
-            )
+            messages = session.query(Messages).filter(Messages.conv_id == conv_id).order_by(Messages.timestamp).all()
             if not messages:
                 return []
             clean_messages = []
@@ -147,12 +140,7 @@ class Database:
 
     def get_user_id(self, user_name):
         with self.Session() as session:
-            user_ids = (
-                session.query(Messages.user_id)
-                .filter(Messages.user_name == user_name)
-                .distinct()
-                .all()
-            )
+            user_ids = session.query(Messages.user_id).filter(Messages.user_name == user_name).distinct().all()
             assert user_ids
             return user_ids[0][0]
 
@@ -198,26 +186,20 @@ class Database:
             if prompt:
                 prompt.prompt = text
             else:
-                new_prompt = SystemPrompts(
-                    user_id=user_id, prompt=text, model=current_model
-                )
+                new_prompt = SystemPrompts(user_id=user_id, prompt=text, model=current_model)
                 session.add(new_prompt)
             session.commit()
 
     def get_short_name(self, user_id: int):
         with self.Session() as session:
-            name = (
-                session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
-            )
+            name = session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
             if name:
                 return name.short_name
             return DEFAULT_SHORT_NAME
 
     def set_short_name(self, user_id: int, text: str):
         with self.Session() as session:
-            name = (
-                session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
-            )
+            name = session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
             if name:
                 name.short_name = text
             else:
@@ -240,9 +222,7 @@ class Database:
             if parameters:
                 parameters.parameters = json.dumps(params)
             else:
-                parameters = GenerationParameters(
-                    user_id=user_id, model=current_model, parameters=json.dumps(params)
-                )
+                parameters = GenerationParameters(user_id=user_id, model=current_model, parameters=json.dumps(params))
                 session.add(parameters)
             session.commit()
 
@@ -259,9 +239,7 @@ class Database:
                 return json.loads(parameters.parameters)
             return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
 
-    def save_user_message(
-        self, content: str, conv_id: str, user_id: int, user_name: str = None
-    ):
+    def save_user_message(self, content: str, conv_id: str, user_id: int, user_name: str = None):
         with self.Session() as session:
             new_message = Messages(
                 role="user",
@@ -330,15 +308,10 @@ class Database:
 
     def get_subscription_info(self, user_id: int):
         with self.Session() as session:
-            subscriptions = (
-                session.query(Subscriptions).filter(Subscriptions.user_id == user_id)
-            ).all()
+            subscriptions = (session.query(Subscriptions).filter(Subscriptions.user_id == user_id)).all()
             if not subscriptions:
                 return 0
-            until_timestamp = max(
-                subscriptions, key=lambda x: x.until_timestamp
-            ).until_timestamp
-            current_ts = self.get_current_ts()
+            until_timestamp = max(subscriptions, key=lambda x: x.until_timestamp).until_timestamp
             remaining_time = until_timestamp - self.get_current_ts()
             return max(remaining_time, 0)
 
