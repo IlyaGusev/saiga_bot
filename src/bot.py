@@ -174,6 +174,7 @@ class LlmBot:
         self.dp.message.register(self.get_params, Command("getparams"))
         self.dp.message.register(self.set_temperature, Command("settemperature"))
         self.dp.message.register(self.set_top_p, Command("settopp"))
+        self.dp.message.register(self.sub_info, Command("subinfo"))
         self.dp.message.register(self.generate)
 
         self.dp.callback_query.register(
@@ -201,6 +202,14 @@ class LlmBot:
         self.db.create_conv_id(chat_id)
         await message.reply("Привет! Как тебе помочь?")
 
+    async def sub_info(self, message: Message):
+        user_id = message.from_user.id
+        remaining_seconds = self.db.get_subscription_info(user_id)
+        if remaining_seconds > 0:
+            await message.reply(f"Подписка активирована! Осталось {remaining_seconds//3600}ч")
+        else:
+            await message.reply("Подписка неактивна")
+
     def count_remaining_messages(self, user_id: int, model: str):
         is_subscribed = self.db.is_subscribed_user(user_id)
         mode = "standard" if not is_subscribed else "subscribed"
@@ -223,6 +232,8 @@ class LlmBot:
         text = text.replace("@{}".format(self.bot_info.username), "").strip()
         self.db.set_system_prompt(chat_id, text)
         self.db.create_conv_id(chat_id)
+        if len(text) > self.chunk_size:
+            text = text[:self.chunk_size] + "... truncated"
         await message.reply(f"Новый системный промпт задан:\n\n{text}")
 
     async def get_system(self, message: Message):
@@ -338,6 +349,8 @@ class LlmBot:
         is_chat = chat_id != message.from_user.id
         conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
+        if not history:
+            await message.reply("Нет истории!")
         for m in history:
             if not isinstance(m["content"], str):
                 m["content"] = "Not text"
@@ -346,7 +359,7 @@ class LlmBot:
         history = json.dumps(history, ensure_ascii=False)
         if len(history) > self.chunk_size:
             history = history[: self.chunk_size] + "... truncated"
-        await message.reply(history, parse_mode=None)
+        await message.reply(history)
 
     def get_user_name(self, user):
         return user.full_name if user.full_name else user.username
@@ -549,7 +562,9 @@ class LlmBot:
     def _prepare_history(self, history, model: str, is_chat: bool = False):
         if is_chat:
             history = self._format_chat(history)
+        assert history
         history = self._merge_messages(history)
+        assert history
         history = [{"content": m["content"], "role": m["role"]} for m in history]
         history = [
             m
