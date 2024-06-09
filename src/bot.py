@@ -1,10 +1,12 @@
 import asyncio
 import os
 import json
+import copy
 import traceback
 import base64
 from functools import wraps
 
+import requests
 import fire
 import tiktoken
 from aiogram import Bot, Dispatcher, F
@@ -27,6 +29,7 @@ DEFAULT_MESSAGE_COUNT_LIMIT = {
 }
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
+DALLE_DAILY_LIMIT = 5
 START_TEMPLATE = """
 Привет! Я Сайга, бот с разными языковыми моделями.
 Текущая модель: {model}
@@ -48,6 +51,30 @@ START_TEMPLATE = """
 
 По всем вопросам писать @YallenGusev
 """
+
+TOOLS_PROMPT = """
+## Tools that are availabe to you
+
+### dalle
+Whenever a description of an image is given, create a prompt that dalle can use to generate the image.
+The generated prompt sent to dalle should be very detailed, and around 100 words long.
+Output a JSON in the following format: {{"tools": {{"dalle": {{"prompt": "...", "prompt_russian": "..."}}}}}}
+
+### search
+Use this tool whenever a search query is needed to answer user queries.
+Output a JSON in the following format: {{"tools": {{"dalle": {{"query": "..."}}}}}}
+
+## Conversation
+
+{conversation}
+
+## Task
+Call tools based on the last user message. All other message are just for the context.
+Do not call tools when it is not needed.
+Return a tool call in the appropriate format. If not tool calls are needed, return {{"tools": {{}}}}
+"""
+
+IMAGE_PLACEHOLDER = "<image>"
 
 
 class Tokenizer:
@@ -104,12 +131,14 @@ class LlmBot:
         self.clients = dict()
         self.model_names = dict()
         self.can_handle_images = dict()
+        self.can_handle_tools = dict()
         self.default_prompts = dict()
         self.default_params = dict()
         self.limits = dict()
         for model_name, config in client_config.items():
             self.model_names[model_name] = config.pop("model_name")
             self.can_handle_images[model_name] = config.pop("can_handle_images", False)
+            self.can_handle_tools[model_name] = config.pop("can_handle_tools", False)
             self.default_prompts[model_name] = config.pop("system_prompt", "")
             if "params" in config:
                 self.default_params[model_name] = config.pop("params")
@@ -215,9 +244,7 @@ class LlmBot:
         if not history:
             await message.reply("Нет истории!")
             return
-        for m in history:
-            if not isinstance(m["content"], str):
-                m["content"] = "Not text"
+        history = self._replace_images(history)
         model = self.db.get_current_model(chat_id)
         history = self._prepare_history(history, model=model, is_chat=is_chat)
         history = json.dumps(history, ensure_ascii=False)
@@ -394,6 +421,47 @@ class LlmBot:
         await message.reply(f"Текущие параметры генерации: {json.dumps(params)}")
 
     #
+    # Инструменты
+    #
+
+    async def check_tools(self, messages, model: str):
+        messages = copy.deepcopy(messages[-4:])
+        messages = self._replace_images(messages)
+        conversation = "\n\n".join([f"{m['role']}: {m['content']}" for m in messages])
+        prompt = TOOLS_PROMPT.format(conversation=conversation)
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            chat_completion = await self.clients[model].chat.completions.create(
+                model=self.model_names[model], messages=messages
+            )
+
+            answer = chat_completion.choices[0].message.content
+            begin_idx = answer.find("{")
+            end_idx = answer.rfind("}")
+            answer = json.loads(answer[begin_idx : end_idx + 1])["tools"]
+        except Exception:
+            answer = {}
+        return answer
+
+    async def generate_image(self, prompt: str, model: str):
+        response = await self.clients[model].images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1,
+        )
+        image_url = response.data[0].url
+        return image_url
+
+    def encode_image(self, image_url):
+        response = requests.get(image_url)
+        response.raise_for_status()
+        image_data = response.content
+        encoded_image = base64.b64encode(image_data).decode("utf-8")
+        return encoded_image
+
+    #
     # Генерация
     #
 
@@ -448,7 +516,45 @@ class LlmBot:
 
         placeholder = await message.reply("💬")
 
+        def save_message(answer, new_message_id, model):
+            self.db.save_assistant_message(
+                content=answer,
+                conv_id=conv_id,
+                message_id=new_message_id,
+                model=model,
+                system_prompt=system_prompt,
+                reply_user_id=user_id,
+            )
+
         try:
+            if self.can_handle_tools[model]:
+                tools = await self.check_tools(history, model=model)
+                is_dalle_called = "dalle" in tools and "prompt" in tools["dalle"]
+                dalle_count = self.db.count_generated_images(user_id, 86400)
+                is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
+                if is_dalle_called:
+                    if not is_dalle_remaining:
+                        await placeholder.edit_text("Лимит по генерации картинок исчерпан, восстановится через 24 часа")
+                        return
+                    image_url = await self.generate_image(tools["dalle"]["prompt"], model="gpt-4o")
+                    encoded_image = self.encode_image(image_url)
+                    answer = [
+                        {"type": "text", "text": tools["dalle"]["prompt_russian"]},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"},
+                        },
+                    ]
+
+                    caption = tools["dalle"]["prompt_russian"]
+                    await placeholder.edit_text(caption)
+                    new_message = await self.bot.send_photo(
+                        chat_id=chat_id, photo=image_url, reply_to_message_id=message.message_id
+                    )
+                    save_message(answer, new_message.message_id, "dalle")
+                    return
+
+            history = self._fix_image_roles(history)
             answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
 
             chunk_size = self.chunk_size
@@ -462,26 +568,13 @@ class LlmBot:
                 answer_parts[-1],
                 reply_markup=markup,
             )
-
-            self.db.save_assistant_message(
-                content=answer,
-                conv_id=conv_id,
-                message_id=new_message.message_id,
-                model=model,
-                system_prompt=system_prompt,
-                reply_user_id=user_id,
-            )
+            save_message(answer, new_message.message_id, model)
 
         except Exception:
             traceback.print_exc()
             await placeholder.edit_text("Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться.")
 
     async def _query_api(self, model, messages, system_prompt: str, **kwargs):
-        tokens_count = self._count_tokens(messages, model=model)
-        while tokens_count > self.history_max_tokens and len(messages) >= 3:
-            messages = messages[2:]
-            tokens_count = self._count_tokens(messages, model=model)
-
         assert messages
         if messages[0]["role"] != "system" and system_prompt.strip():
             messages.insert(0, {"role": "system", "content": system_prompt})
@@ -632,6 +725,11 @@ class LlmBot:
         history = [{"content": m["content"], "role": m["role"]} for m in history]
         history = [m for m in history if isinstance(m["content"], str) or self.can_handle_images[model]]
         assert history
+        tokens_count = self._count_tokens(history, model=model)
+        while tokens_count > self.history_max_tokens and len(history) >= 3:
+            history = history[2:]
+            tokens_count = self._count_tokens(history, model=model)
+        assert history
         return history
 
     def _get_user_name(self, user):
@@ -640,7 +738,19 @@ class LlmBot:
     def _crop_content(self, content):
         if isinstance(content, str):
             return content.replace("\n", " ")[:40]
-        return "Not text"
+        return IMAGE_PLACEHOLDER
+
+    def _replace_images(self, messages):
+        for m in messages:
+            if not isinstance(m["content"], str):
+                m["content"] = IMAGE_PLACEHOLDER
+        return messages
+
+    def _fix_image_roles(self, messages):
+        for m in messages:
+            if not isinstance(m["content"], str) and m["role"] == "assistant":
+                m["role"] = "user"
+        return messages
 
     def _truncate_text(self, text: str):
         if len(text) > self.chunk_size:

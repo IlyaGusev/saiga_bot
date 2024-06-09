@@ -264,7 +264,7 @@ class Database:
         with self.Session() as session:
             new_message = Messages(
                 role="assistant",
-                content=content,
+                content=self._serialize_content(content),
                 conv_id=conv_id,
                 timestamp=self.get_current_ts(),
                 message_id=message_id,
@@ -295,6 +295,22 @@ class Database:
                     Messages.reply_user_id == user_id,
                     Messages.role == "assistant",
                     Messages.model == model,
+                    Messages.timestamp.isnot(None),
+                    Messages.timestamp > (current_ts - interval),
+                )
+                .scalar()
+            )
+            return count
+
+    def count_generated_images(self, user_id: int, interval: int):
+        with self.Session() as session:
+            current_ts = self.get_current_ts()
+            count = (
+                session.query(func.count(Messages.id))
+                .filter(
+                    Messages.reply_user_id == user_id,
+                    Messages.role == "assistant",
+                    Messages.model == "dalle",
                     Messages.timestamp.isnot(None),
                     Messages.timestamp > (current_ts - interval),
                 )
