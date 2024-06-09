@@ -444,6 +444,7 @@ class LlmBot:
         return answer
 
     async def generate_image(self, prompt: str, model: str):
+        print(f"dalle #### {self._crop_content(prompt)}")
         response = await self.clients[model].images.generate(
             model="dall-e-3",
             prompt=prompt,
@@ -536,6 +537,7 @@ class LlmBot:
                     if not is_dalle_remaining:
                         await placeholder.edit_text("Лимит по генерации картинок исчерпан, восстановится через 24 часа")
                         return
+                    print(f"dalle orig #### {self._crop_content(content)}")
                     image_url = await self.generate_image(tools["dalle"]["prompt"], model="gpt-4o")
                     encoded_image = self.encode_image(image_url)
                     answer = [
