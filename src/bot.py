@@ -267,8 +267,7 @@ class LlmBot:
         assert model_name in self.clients
         self.db.set_current_model(chat_id, model_name)
         self.db.create_conv_id(chat_id)
-        await self.bot.send_message(chat_id=chat_id, text=f"Новая модель задана:\n\n{model_name}")
-        await self.bot.delete_message(chat_id, callback.message.message_id)
+        await callback.message.edit_text(f"Новая модель задана:\n\n{model_name}")
 
     async def get_model(self, message: Message):
         chat_id = message.chat.id
@@ -344,11 +343,9 @@ class LlmBot:
         short_name = character["short_name"]
         self.db.set_short_name(chat_id, short_name)
         self.db.create_conv_id(chat_id)
-        await self.bot.send_message(
-            chat_id=chat_id,
-            text=f"Новая персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{short_name}'",
+        await callback.message.edit_text(
+            f"Новый персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{short_name}'"
         )
-        await self.bot.delete_message(chat_id, callback.message.message_id)
 
     #
     # Лимиты
@@ -391,8 +388,7 @@ class LlmBot:
         chat_id = callback.message.chat.id
         temperature = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, temperature=temperature)
-        await self.bot.send_message(chat_id=chat_id, text=f"Новая температура задана:\n\n{temperature}")
-        await self.bot.delete_message(chat_id, callback.message.message_id)
+        await callback.message.edit_text(f"Новая температура задана:\n\n{temperature}")
 
     @check_admin
     async def set_top_p(self, message: Message):
@@ -403,8 +399,7 @@ class LlmBot:
         chat_id = callback.message.chat.id
         top_p = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, top_p=top_p)
-        await self.bot.send_message(chat_id=chat_id, text=f"Новое top-p задано:\n\n{top_p}")
-        await self.bot.delete_message(chat_id, callback.message.message_id)
+        await callback.message.edit_text(f"Новое top-p задано:\n\n{top_p}")
 
     async def get_params(self, message: Message):
         chat_id = message.chat.id
@@ -501,8 +496,12 @@ class LlmBot:
                     for tool_call in tool_calls:
                         function_name = tool_call.function.name
                         function_to_call = self.tools[function_name]
-                        function_args = json.loads(tool_call.function.arguments)
                         print(function_name, "call", tool_call.function.arguments)
+                        try:
+                            function_args = json.loads(tool_call.function.arguments)
+                        except json.decoder.JSONDecodeError:
+                            print(f"Bad json: {tool_call.function.arguments}")
+                            continue
                         if function_name == "dalle":
                             if not is_dalle_remaining:
                                 await placeholder.edit_text(
