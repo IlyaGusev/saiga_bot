@@ -1,9 +1,11 @@
 import asyncio
+import io
 import os
 import json
 import copy
 import traceback
 import base64
+import textwrap
 from functools import wraps
 
 import requests
@@ -13,11 +15,12 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, InlineKeyboardButton, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer
 
+from src.tools import Tool
 from src.database import Database
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -52,29 +55,7 @@ START_TEMPLATE = """
 По всем вопросам писать @YallenGusev
 """
 
-TOOLS_PROMPT = """
-## Tools that are availabe to you
-
-### dalle
-Whenever a description of an image is given, create a prompt that dalle can use to generate the image.
-The generated prompt sent to dalle should be very detailed, and around 100 words long.
-Output a JSON in the following format: {{"tools": {{"dalle": {{"prompt": "...", "prompt_russian": "..."}}}}}}
-
-### search
-Use this tool whenever a search query is needed to answer user queries.
-Output a JSON in the following format: {{"tools": {{"dalle": {{"query": "..."}}}}}}
-
-## Conversation
-
-{conversation}
-
-## Task
-Call tools based on the last user message. All other message are just for the context.
-Do not call tools when it is not needed.
-Return a tool call in the appropriate format. If not tool calls are needed, return {{"tools": {{}}}}
-"""
-
-IMAGE_PLACEHOLDER = "<image>"
+IMAGE_PLACEHOLDER = "<image_placeholder>"
 
 
 class Tokenizer:
@@ -124,6 +105,7 @@ class LlmBot:
         history_max_tokens: int,
         chunk_size: int,
         characters_path: str,
+        tools_config_path: str,
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -149,6 +131,15 @@ class LlmBot:
         assert self.clients
         assert self.model_names
         assert self.default_prompts
+
+        # Инструменты
+        self.tools = dict()
+        if tools_config_path:
+            assert os.path.exists(tools_config_path)
+            with open(tools_config_path) as r:
+                tools_config = json.load(r)
+                for tool_name, tool_config in tools_config.items():
+                    self.tools[tool_name] = Tool.by_name(tool_name)(**tool_config)
 
         # Персонажи
         self.characters = dict()
@@ -425,42 +416,14 @@ class LlmBot:
     #
 
     async def check_tools(self, messages, model: str):
-        messages = copy.deepcopy(messages[-4:])
+        messages = copy.deepcopy(messages)
         messages = self._replace_images(messages)
-        conversation = "\n\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        prompt = TOOLS_PROMPT.format(conversation=conversation)
-        messages = [{"role": "user", "content": prompt}]
-        try:
-            chat_completion = await self.clients[model].chat.completions.create(
-                model=self.model_names[model], messages=messages
-            )
-
-            answer = chat_completion.choices[0].message.content
-            begin_idx = answer.find("{")
-            end_idx = answer.rfind("}")
-            answer = json.loads(answer[begin_idx : end_idx + 1])["tools"]
-        except Exception:
-            answer = {}
-        return answer
-
-    async def generate_image(self, prompt: str, model: str):
-        print(f"dalle #### {self._crop_content(prompt)}")
-        response = await self.clients[model].images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1,
+        tools = [t.get_specification() for t in self.tools.values()]
+        chat_completion = await self.clients[model].chat.completions.create(
+            model=self.model_names[model], messages=messages, tools=tools, tool_choice="auto", max_tokens=2048
         )
-        image_url = response.data[0].url
-        return image_url
-
-    def encode_image(self, image_url):
-        response = requests.get(image_url)
-        response.raise_for_status()
-        image_data = response.content
-        encoded_image = base64.b64encode(image_data).decode("utf-8")
-        return encoded_image
+        response_message = chat_completion.choices[0].message
+        return response_message
 
     #
     # Генерация
@@ -517,44 +480,75 @@ class LlmBot:
 
         placeholder = await message.reply("💬")
 
-        def save_message(answer, new_message_id, model):
-            self.db.save_assistant_message(
-                content=answer,
-                conv_id=conv_id,
-                message_id=new_message_id,
-                model=model,
-                system_prompt=system_prompt,
-                reply_user_id=user_id,
-            )
-
         try:
-            if self.can_handle_tools[model]:
-                tools = await self.check_tools(history, model=model)
-                is_dalle_called = "dalle" in tools and "prompt" in tools["dalle"]
-                dalle_count = self.db.count_generated_images(user_id, 86400)
-                is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
-                if is_dalle_called:
-                    if not is_dalle_remaining:
-                        await placeholder.edit_text("Лимит по генерации картинок исчерпан, восстановится через 24 часа")
-                        return
-                    print(f"dalle orig #### {self._crop_content(content)}")
-                    image_url = await self.generate_image(tools["dalle"]["prompt"], model="gpt-4o")
-                    encoded_image = self.encode_image(image_url)
-                    answer = [
-                        {"type": "text", "text": tools["dalle"]["prompt_russian"]},
+            if self.can_handle_tools[model] and self.tools:
+                response_message = await self.check_tools(history, model=model)
+                tool_calls = response_message.tool_calls
+                if tool_calls:
+                    tool_calls_dict = [
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"},
-                        },
+                            "type": "function",
+                            "id": c.id,
+                            "function": {"arguments": c.function.arguments, "name": c.function.name},
+                        }
+                        for c in tool_calls
                     ]
+                    response_message = {"content": None, "role": "assistant", "tool_calls": tool_calls_dict}
 
-                    caption = tools["dalle"]["prompt_russian"]
-                    await placeholder.edit_text(caption)
-                    new_message = await self.bot.send_photo(
-                        chat_id=chat_id, photo=image_url, reply_to_message_id=message.message_id
-                    )
-                    save_message(answer, new_message.message_id, "dalle")
-                    return
+                    history.append(response_message)
+                    dalle_count = self.db.count_generated_images(user_id, 86400)
+                    is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
+                    for tool_call in tool_calls:
+                        function_name = tool_call.function.name
+                        function_to_call = self.tools[function_name]
+                        function_args = json.loads(tool_call.function.arguments)
+                        print(function_name, "call", tool_call.function.arguments)
+                        if function_name == "dalle":
+                            if not is_dalle_remaining:
+                                await placeholder.edit_text(
+                                    "Лимит по генерации картинок исчерпан, восстановится через 24 часа"
+                                )
+                                return
+                            else:
+                                await placeholder.edit_text(
+                                    f"Генерирую картинку по промпту: {function_args['prompt_russian']}"
+                                )
+                        function_response = await function_to_call(**function_args)
+                        history.append(
+                            {
+                                "tool_call_id": tool_call.id,
+                                "role": "tool",
+                                "name": function_name,
+                                "content": function_response,
+                            }
+                        )
+                        if function_name == "dalle":
+                            base64_image = function_response[1]["image_url"]["url"].replace(
+                                "data:image/jpeg;base64,", ""
+                            )
+                            image_data = base64.b64decode(base64_image)
+                            input_file = BufferedInputFile(image_data, filename="image.jpeg")
+                            new_message = await self.bot.send_photo(
+                                chat_id=chat_id, photo=input_file, reply_to_message_id=message.message_id
+                            )
+                            self.db.save_assistant_message(
+                                content=function_response,
+                                conv_id=conv_id,
+                                message_id=new_message.message_id,
+                                model="dalle",
+                                system_prompt=system_prompt,
+                                reply_user_id=user_id,
+                            )
+                            return
+                        else:
+                            self.db.save_tool_calls_message(conv_id=conv_id, model=model, tool_calls=tool_calls_dict)
+                            self.db.save_tool_answer_message(
+                                tool_call_id=tool_call.id,
+                                content=function_response,
+                                conv_id=conv_id,
+                                model=model,
+                                name=function_name,
+                            )
 
             history = self._fix_image_roles(history)
             answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
@@ -570,7 +564,14 @@ class LlmBot:
                 answer_parts[-1],
                 reply_markup=markup,
             )
-            save_message(answer, new_message.message_id, model)
+            self.db.save_assistant_message(
+                content=answer,
+                conv_id=conv_id,
+                message_id=new_message.message_id,
+                model=model,
+                system_prompt=system_prompt,
+                reply_user_id=user_id,
+            )
 
         except Exception:
             traceback.print_exc()
@@ -666,7 +667,7 @@ class LlmBot:
             for m in messages:
                 if isinstance(m["content"], str):
                     tokens_count += len(encoding.encode(m["content"]))
-                else:
+                elif self._is_image_content(m["content"]):
                     tokens_count += 1000
             return tokens_count
 
@@ -695,8 +696,6 @@ class LlmBot:
         for m in messages:
             content = m["content"]
             role = m["role"]
-            if content is None:
-                continue
             if role == prev_role:
                 is_current_str = isinstance(content, str)
                 is_prev_str = isinstance(new_messages[-1]["content"], str)
@@ -712,7 +711,7 @@ class LlmBot:
         for m in messages:
             content = m["content"]
             role = m["role"]
-            if content is None:
+            if role == "user" and content is None:
                 continue
             if role == "user" and isinstance(content, str) and m["user_name"]:
                 m["content"] = "{}: {}".format(m["user_name"], content)
@@ -724,8 +723,9 @@ class LlmBot:
         assert history
         history = self._merge_messages(history)
         assert history
-        history = [{"content": m["content"], "role": m["role"]} for m in history]
-        history = [m for m in history if isinstance(m["content"], str) or self.can_handle_images[model]]
+        save_keys = ("content", "role", "tool_calls", "tool_call_id", "name")
+        history = [{k: m[k] for k in save_keys if m.get(k) is not None or k == "content"} for m in history]
+        history = [m for m in history if not self._is_image_content(m["content"]) or self.can_handle_images[model]]
         assert history
         tokens_count = self._count_tokens(history, model=model)
         while tokens_count > self.history_max_tokens and len(history) >= 3:
@@ -742,16 +742,19 @@ class LlmBot:
             return content.replace("\n", " ")[:40]
         return IMAGE_PLACEHOLDER
 
-    def _replace_images(self, messages):
-        for m in messages:
-            if not isinstance(m["content"], str):
-                m["content"] = IMAGE_PLACEHOLDER
-        return messages
+    def _is_image_content(self, content):
+        return isinstance(content, list) and content[-1]["type"] == "image_url"
 
     def _fix_image_roles(self, messages):
         for m in messages:
-            if not isinstance(m["content"], str) and m["role"] == "assistant":
+            if self._is_image_content(m["content"]):
                 m["role"] = "user"
+        return messages
+
+    def _replace_images(self, messages):
+        for m in messages:
+            if self._is_image_content(m["content"]):
+                m["content"] = IMAGE_PLACEHOLDER
         return messages
 
     def _truncate_text(self, text: str):
@@ -767,6 +770,7 @@ def main(
     history_max_tokens: int = 6144,
     chunk_size: int = 3500,
     characters_path: str = None,
+    tools_config_path: str = None,
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
@@ -775,6 +779,7 @@ def main(
         history_max_tokens=history_max_tokens,
         chunk_size=chunk_size,
         characters_path=characters_path,
+        tools_config_path=tools_config_path,
     )
     asyncio.run(bot.start_polling())
 

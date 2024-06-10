@@ -26,12 +26,15 @@ class Messages(Base):
     user_id = Column(Integer, nullable=True)
     user_name = Column(String, nullable=True)
     reply_user_id = Column(Integer, nullable=True)
-    content = Column(Text, nullable=False)
+    content = Column(Text, nullable=True)
     conv_id = Column(String, nullable=False, index=True)
     timestamp = Column(Integer, nullable=False)
-    message_id = Column(Integer)
+    message_id = Column(Integer, nullable=True)
     model = Column(String)
-    system_prompt = Column(Text)
+    system_prompt = Column(Text, nullable=True)
+    tool_calls = Column(Text, nullable=True)
+    tool_call_id = Column(Text, nullable=True)
+    name = Column(Text, nullable=True)
 
 
 class Conversations(Base):
@@ -134,6 +137,9 @@ class Database:
                     "timestamp": m.timestamp,
                     "user_id": m.user_id,
                     "user_name": m.user_name,
+                    "tool_calls": self._parse_content(m.tool_calls),
+                    "tool_call_id": m.tool_call_id,
+                    "name": m.name,
                 }
                 clean_messages.append(message)
             return clean_messages
@@ -275,6 +281,45 @@ class Database:
             session.add(new_message)
             session.commit()
 
+    def save_tool_answer_message(
+        self,
+        content: str,
+        conv_id: str,
+        model: str,
+        tool_call_id: str,
+        name: str,
+    ):
+        with self.Session() as session:
+            new_message = Messages(
+                role="tool",
+                content=self._serialize_content(content),
+                conv_id=conv_id,
+                timestamp=self.get_current_ts(),
+                model=model,
+                tool_call_id=tool_call_id,
+                name=name,
+            )
+            session.add(new_message)
+            session.commit()
+
+    def save_tool_calls_message(
+        self,
+        tool_calls,
+        conv_id: str,
+        model: str,
+    ):
+        with self.Session() as session:
+            new_message = Messages(
+                role="assistant",
+                content=None,
+                conv_id=conv_id,
+                timestamp=self.get_current_ts(),
+                model=model,
+                tool_calls=self._serialize_content(tool_calls),
+            )
+            session.add(new_message)
+            session.commit()
+
     def save_feedback(self, feedback: str, user_id: int, message_id: int):
         with self.Session() as session:
             new_feedback = Likes(
@@ -354,6 +399,8 @@ class Database:
 
     def _parse_content(self, content):
         try:
+            if content is None:
+                return None
             parsed_content = json.loads(content)
             if not isinstance(parsed_content, list):
                 return content
