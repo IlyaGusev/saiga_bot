@@ -27,8 +27,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 DEFAULT_MESSAGE_COUNT_LIMIT = {
-    "standard": {"limit": 10000, "interval": 31536000},
-    "subscribed": {"limit": 100000, "interval": 31536000},
+    "standard": {"limit": 1000, "interval": 86400},
+    "subscribed": {"limit": 1000, "interval": 86400},
 }
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
@@ -56,6 +56,14 @@ START_TEMPLATE = """
 """
 
 IMAGE_PLACEHOLDER = "<image_placeholder>"
+BUY_TITLE = "*Покупка подписки на неделю*"
+BUT_DESCRIPTION = """Лимиты общения с моделями станут такими:
+{sub_limits}
+
+Подписка будет действовать ровно 7 дней.
+
+Цена подписки: *500 рублей*
+"""
 
 
 class Tokenizer:
@@ -177,6 +185,9 @@ class LlmBot:
         for value in TOP_P_RANGE:
             self.top_p_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settopp:{value}"))
 
+        self.buy_kb = InlineKeyboardBuilder()
+        self.buy_kb.add(InlineKeyboardButton(text="Купить", callback_data="buy:0"))
+
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
         self.bot_info = None
@@ -196,6 +207,7 @@ class LlmBot:
         self.dp.message.register(self.set_temperature, Command("settemperature"))
         self.dp.message.register(self.set_top_p, Command("settopp"))
         self.dp.message.register(self.sub_info, Command("subinfo"))
+        self.dp.message.register(self.sub_buy, Command("subbuy"))
         self.dp.message.register(self.history, Command("history"))
         self.dp.message.register(self.generate)
 
@@ -204,6 +216,7 @@ class LlmBot:
         self.dp.callback_query.register(self.set_character_button_handler, F.data.startswith("setcharacter:"))
         self.dp.callback_query.register(self.set_temperature_button_handler, F.data.startswith("settemperature:"))
         self.dp.callback_query.register(self.set_top_p_button_handler, F.data.startswith("settopp:"))
+        self.dp.callback_query.register(self.sub_buy_proceed, F.data.startswith("buy:"))
 
     async def start_polling(self):
         self.bot_info = await self.bot.get_me()
@@ -375,6 +388,26 @@ class LlmBot:
             text = f"Подписка активирована! Осталось {remaining_seconds//3600}ч"
         await message.reply(text)
 
+    async def sub_buy(self, message: Message):
+        user_id = message.from_user.id
+        remaining_seconds = self.db.get_subscription_info(user_id)
+        # if remaining_seconds > 0:
+        #    await message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
+        #    return
+        template = "- *{model}*: {count} сообщений каждые {hours} часа"
+        sub_limits = [
+            template.format(
+                model=model, count=limit["subscribed"]["limit"], hours=limit["subscribed"]["interval"] // 3600
+            )
+            for model, limit in self.limits.items()
+        ]
+        description = BUT_DESCRIPTION.format(sub_limits="\n".join(sub_limits))
+        text = BUY_TITLE + "\n\n" + description
+        await message.reply(text, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
+
+    async def sub_buy_proceed(self, callback: CallbackQuery):
+        await callback.message.reply("Ссылка для оплаты: <ссылка>")
+
     #
     # Параметры генерации
     #
@@ -448,7 +481,9 @@ class LlmBot:
         remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
         print(user_id, model, remaining_count)
         if remaining_count <= 0:
-            await message.reply(f"Вы превысили лимит запросов по {model}, переключите модель с помощью /setmodel")
+            await message.reply(
+                f"Превышен дневной лимит запросов по {model}, подождите или переключите модель с /setmodel"
+            )
             return
 
         params = self.db.get_parameters(chat_id, self.default_params)
@@ -720,11 +755,15 @@ class LlmBot:
         if is_chat:
             history = self._format_chat(history)
         assert history
-        history = self._merge_messages(history)
-        assert history
         save_keys = ("content", "role", "tool_calls", "tool_call_id", "name")
         history = [{k: m[k] for k in save_keys if m.get(k) is not None or k == "content"} for m in history]
         history = [m for m in history if not self._is_image_content(m["content"]) or self.can_handle_images[model]]
+        assert history
+        history = [
+            m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or self.can_handle_tools[model]
+        ]
+        assert history
+        history = self._merge_messages(history)
         assert history
         tokens_count = self._count_tokens(history, model=model)
         while tokens_count > self.history_max_tokens and len(history) >= 3:
