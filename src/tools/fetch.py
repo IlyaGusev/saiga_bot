@@ -11,6 +11,8 @@ class FetchTool(Tool):
     async def __call__(self, url: str) -> str:
         downloaded = fetch_url(url)
         result = extract(downloaded)
+        if result is None:
+            return f"Failed to fetch content from url: {url}"
         return result[: self.max_chars]
 
     def get_specification(self):

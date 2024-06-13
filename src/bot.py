@@ -391,9 +391,9 @@ class LlmBot:
     async def sub_buy(self, message: Message):
         user_id = message.from_user.id
         remaining_seconds = self.db.get_subscription_info(user_id)
-        # if remaining_seconds > 0:
-        #    await message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
-        #    return
+        if remaining_seconds > 0:
+            await message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
+            return
         template = "- *{model}*: {count} сообщений каждые {hours} часа"
         sub_limits = [
             template.format(
@@ -547,7 +547,10 @@ class LlmBot:
                                 await placeholder.edit_text(
                                     f"Генерирую картинку по промпту: {function_args['prompt_russian']}"
                                 )
-                        function_response = await function_to_call(**function_args)
+                        try:
+                            function_response = await function_to_call(**function_args)
+                        except Exception as e:
+                            function_response = f"Ошибка при вызове инструмента: {str(e)}"
                         history.append(
                             {
                                 "tool_call_id": tool_call.id,
@@ -585,6 +588,7 @@ class LlmBot:
                             )
 
             history = self._fix_image_roles(history)
+            history = self._fix_tool_calls(history)
             answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
 
             chunk_size = self.chunk_size
@@ -750,6 +754,17 @@ class LlmBot:
             if role == "user" and isinstance(content, str) and m["user_name"]:
                 m["content"] = "{}: {}".format(m["user_name"], content)
         return messages
+
+    @staticmethod
+    def _fix_tool_calls(messages):
+        clean_messages = []
+        is_expecting_tool_answer = False
+        for m in messages:
+            if is_expecting_tool_answer and "tool_call_id" not in m:
+                clean_messages.pop()
+            is_expecting_tool_answer = "tool_calls" in m
+            clean_messages.append(m)
+        return clean_messages
 
     def _prepare_history(self, history, model: str, is_chat: bool = False):
         if is_chat:

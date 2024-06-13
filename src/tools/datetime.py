@@ -42,5 +42,5 @@ class DateTimeTool(Tool):
             wtr = requests.get(url).json().get("datetime")
             wtr_obj = datetime.strptime(wtr, "%Y-%m-%dT%H:%M:%S.%f%z")
             return wtr_obj.strftime("Date: %Y-%m-%d, time: %H:%M:%S")
-        except:
+        except Exception:
             return json.dumps({"result": "No result was found"})
