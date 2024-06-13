@@ -1,6 +1,7 @@
 import secrets
 import json
 import copy
+from typing import Optional
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, func
@@ -264,8 +265,8 @@ class Database:
         conv_id: str,
         message_id: int,
         model: str,
-        system_prompt: str,
-        reply_user_id: int,
+        system_prompt: Optional[str] = None,
+        reply_user_id: Optional[int] = None,
     ):
         with self.Session() as session:
             new_message = Messages(

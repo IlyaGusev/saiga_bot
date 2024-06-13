@@ -443,7 +443,7 @@ class LlmBot:
     # Инструменты
     #
 
-    async def check_tools(self, messages, model: str):
+    async def _check_tools(self, messages, model: str):
         messages = copy.deepcopy(messages)
         messages = self._replace_images(messages)
         tools = [t.get_specification() for t in self.tools.values()]
@@ -452,6 +452,78 @@ class LlmBot:
         )
         response_message = chat_completion.choices[0].message
         return response_message
+
+    async def _call_dalle(self, conv_id: str, user_id: int, chat_id: int, placeholder: Message, **kwargs):
+        dalle_count = self.db.count_generated_images(user_id, 86400)
+        is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
+        if not is_dalle_remaining:
+            await placeholder.edit_text("Лимит по генерации картинок исчерпан, восстановится через 24 часа")
+            return
+
+        await placeholder.edit_text(f"Генерирую картинку по промпту: {kwargs['prompt_russian']}")
+        function_response = await self.tools["dalle"](**kwargs)
+        base64_image = function_response[1]["image_url"]["url"].replace("data:image/jpeg;base64,", "")
+        image_data = base64.b64decode(base64_image)
+        input_file = BufferedInputFile(image_data, filename="image.jpeg")
+        new_message = await self.bot.send_photo(
+            chat_id=chat_id, photo=input_file, reply_to_message_id=placeholder.message_id
+        )
+        self.db.save_assistant_message(
+            content=function_response,
+            conv_id=conv_id,
+            message_id=new_message.message_id,
+            model="dalle",
+            reply_user_id=user_id,
+        )
+
+    async def _call_tools(self, history, model: str, conv_id: str, user_id: int, chat_id: int, placeholder: Message):
+        response_message = await self._check_tools(history, model=model)
+        tool_calls = response_message.tool_calls
+        if not tool_calls:
+            return history
+
+        tool_calls_dict = [c.to_dict() for c in tool_calls]
+        response_message = {"content": None, "role": "assistant", "tool_calls": tool_calls_dict}
+        history.append(response_message)
+
+        for tool_call in tool_calls:
+            function_name = tool_call.function.name
+            function_to_call = self.tools[function_name]
+            print(function_name, "call", tool_call.function.arguments)
+            try:
+                function_args = json.loads(tool_call.function.arguments)
+            except json.decoder.JSONDecodeError:
+                print(f"Bad json: {tool_call.function.arguments}")
+                continue
+
+            if function_name == "dalle":
+                await self._call_dalle(
+                    chat_id=chat_id, user_id=user_id, conv_id=conv_id, placeholder=placeholder, **function_args
+                )
+                return None
+
+            try:
+                function_response = await function_to_call(**function_args)
+            except Exception as e:
+                function_response = f"Ошибка при вызове инструмента: {str(e)}"
+
+            history.append(
+                {
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": function_name,
+                    "content": function_response,
+                }
+            )
+            self.db.save_tool_calls_message(conv_id=conv_id, model=model, tool_calls=tool_calls_dict)
+            self.db.save_tool_answer_message(
+                tool_call_id=tool_call.id,
+                content=function_response,
+                conv_id=conv_id,
+                model=model,
+                name=function_name,
+            )
+        return history
 
     #
     # Генерация
@@ -512,80 +584,16 @@ class LlmBot:
 
         try:
             if self.can_handle_tools[model] and self.tools:
-                response_message = await self.check_tools(history, model=model)
-                tool_calls = response_message.tool_calls
-                if tool_calls:
-                    tool_calls_dict = [
-                        {
-                            "type": "function",
-                            "id": c.id,
-                            "function": {"arguments": c.function.arguments, "name": c.function.name},
-                        }
-                        for c in tool_calls
-                    ]
-                    response_message = {"content": None, "role": "assistant", "tool_calls": tool_calls_dict}
-
-                    history.append(response_message)
-                    dalle_count = self.db.count_generated_images(user_id, 86400)
-                    is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
-                    for tool_call in tool_calls:
-                        function_name = tool_call.function.name
-                        function_to_call = self.tools[function_name]
-                        print(function_name, "call", tool_call.function.arguments)
-                        try:
-                            function_args = json.loads(tool_call.function.arguments)
-                        except json.decoder.JSONDecodeError:
-                            print(f"Bad json: {tool_call.function.arguments}")
-                            continue
-                        if function_name == "dalle":
-                            if not is_dalle_remaining:
-                                await placeholder.edit_text(
-                                    "Лимит по генерации картинок исчерпан, восстановится через 24 часа"
-                                )
-                                return
-                            else:
-                                await placeholder.edit_text(
-                                    f"Генерирую картинку по промпту: {function_args['prompt_russian']}"
-                                )
-                        try:
-                            function_response = await function_to_call(**function_args)
-                        except Exception as e:
-                            function_response = f"Ошибка при вызове инструмента: {str(e)}"
-                        history.append(
-                            {
-                                "tool_call_id": tool_call.id,
-                                "role": "tool",
-                                "name": function_name,
-                                "content": function_response,
-                            }
-                        )
-                        if function_name == "dalle":
-                            base64_image = function_response[1]["image_url"]["url"].replace(
-                                "data:image/jpeg;base64,", ""
-                            )
-                            image_data = base64.b64decode(base64_image)
-                            input_file = BufferedInputFile(image_data, filename="image.jpeg")
-                            new_message = await self.bot.send_photo(
-                                chat_id=chat_id, photo=input_file, reply_to_message_id=message.message_id
-                            )
-                            self.db.save_assistant_message(
-                                content=function_response,
-                                conv_id=conv_id,
-                                message_id=new_message.message_id,
-                                model="dalle",
-                                system_prompt=system_prompt,
-                                reply_user_id=user_id,
-                            )
-                            return
-                        else:
-                            self.db.save_tool_calls_message(conv_id=conv_id, model=model, tool_calls=tool_calls_dict)
-                            self.db.save_tool_answer_message(
-                                tool_call_id=tool_call.id,
-                                content=function_response,
-                                conv_id=conv_id,
-                                model=model,
-                                name=function_name,
-                            )
+                history = await self._call_tools(
+                    history=history,
+                    model=model,
+                    user_id=user_id,
+                    conv_id=conv_id,
+                    chat_id=chat_id,
+                    placeholder=placeholder,
+                )
+                if history is None:
+                    return
 
             history = self._fix_image_roles(history)
             history = self._fix_tool_calls(history)
