@@ -52,6 +52,9 @@ START_TEMPLATE = """
 /getparams - узнать текущие параметры генерации
 /settemperature - задать температуру
 
+Исходники: https://github.com/IlyaGusev/saiga_bot
+Модель по умолчанию: https://huggingface.co/IlyaGusev/saiga_llama3_8b
+
 По всем вопросам писать @YallenGusev
 """
 
@@ -193,6 +196,7 @@ class LlmBot:
         self.bot_info = None
         self.dp = Dispatcher()
         self.dp.message.register(self.start, Command("start"))
+        self.dp.message.register(self.start, Command("help"))
         self.dp.message.register(self.reset, Command("reset"))
         self.dp.message.register(self.set_system, Command("setsystem"))
         self.dp.message.register(self.get_system, Command("getsystem"))
@@ -485,27 +489,31 @@ class LlmBot:
         tool_calls_dict = [c.to_dict() for c in tool_calls]
         response_message = {"content": None, "role": "assistant", "tool_calls": tool_calls_dict}
         history.append(response_message)
+        self.db.save_tool_calls_message(conv_id=conv_id, model=model, tool_calls=tool_calls_dict)
 
         for tool_call in tool_calls:
             function_name = tool_call.function.name
             function_to_call = self.tools[function_name]
             print(function_name, "call", tool_call.function.arguments)
+
+            function_response = None
             try:
                 function_args = json.loads(tool_call.function.arguments)
             except json.decoder.JSONDecodeError:
-                print(f"Bad json: {tool_call.function.arguments}")
-                continue
+                function_response = "No response from the tool, try again"
+                print(f"Bad tool answer: {tool_call.function.arguments}")
 
-            if function_name == "dalle":
+            if function_response is None and function_name == "dalle":
                 await self._call_dalle(
                     chat_id=chat_id, user_id=user_id, conv_id=conv_id, placeholder=placeholder, **function_args
                 )
                 return None
 
-            try:
-                function_response = await function_to_call(**function_args)
-            except Exception as e:
-                function_response = f"Ошибка при вызове инструмента: {str(e)}"
+            if function_response is None:
+                try:
+                    function_response = await function_to_call(**function_args)
+                except Exception as e:
+                    function_response = f"Ошибка при вызове инструмента: {str(e)}"
 
             history.append(
                 {
@@ -515,7 +523,6 @@ class LlmBot:
                     "content": function_response,
                 }
             )
-            self.db.save_tool_calls_message(conv_id=conv_id, model=model, tool_calls=tool_calls_dict)
             self.db.save_tool_answer_message(
                 tool_call_id=tool_call.id,
                 content=function_response,
@@ -596,7 +603,7 @@ class LlmBot:
                     return
 
             history = self._fix_image_roles(history)
-            history = self._fix_tool_calls(history)
+            history = self._fix_broken_tool_calls(history)
             answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
 
             chunk_size = self.chunk_size
@@ -764,14 +771,16 @@ class LlmBot:
         return messages
 
     @staticmethod
-    def _fix_tool_calls(messages):
+    def _fix_broken_tool_calls(messages):
         clean_messages = []
         is_expecting_tool_answer = False
         for m in messages:
             if is_expecting_tool_answer and "tool_call_id" not in m:
-                clean_messages.pop()
+                clean_messages = clean_messages[:-1]
             is_expecting_tool_answer = "tool_calls" in m
             clean_messages.append(m)
+        if is_expecting_tool_answer:
+            clean_messages = clean_messages[:-1]
         return clean_messages
 
     def _prepare_history(self, history, model: str, is_chat: bool = False):
