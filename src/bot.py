@@ -7,6 +7,7 @@ import traceback
 import base64
 import textwrap
 from functools import wraps
+from email.utils import parseaddr
 
 import requests
 import fire
@@ -19,9 +20,11 @@ from aiogram.types import Message, InlineKeyboardButton, CallbackQuery, Buffered
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from src.tools import Tool
 from src.database import Database
+from src.payments import YookassaHandler, YookassaStatus
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -59,13 +62,17 @@ START_TEMPLATE = """
 """
 
 IMAGE_PLACEHOLDER = "<image_placeholder>"
-BUY_TITLE = "*Покупка подписки на неделю*"
-BUT_DESCRIPTION = """Лимиты общения с моделями станут такими:
+
+SUB_PRICE = 500
+SUB_TITLE = 'Покупка подписки в боте "Сайга" на неделю для пользователя {user_id}'
+SUB_DESCRIPTION = """*Покупка подписки в боте 'Сайга' на неделю*
+
+Лимиты общения с моделями станут такими:
 {sub_limits}
 
 Подписка будет действовать ровно 7 дней.
 
-Цена подписки: *500 рублей*
+Цена подписки: *{price} рублей*
 """
 
 
@@ -117,6 +124,7 @@ class LlmBot:
         chunk_size: int,
         characters_path: str,
         tools_config_path: str,
+        yookassa_config_path: str,
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -189,7 +197,6 @@ class LlmBot:
             self.top_p_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settopp:{value}"))
 
         self.buy_kb = InlineKeyboardBuilder()
-        self.buy_kb.add(InlineKeyboardButton(text="Купить", callback_data="buy:0"))
 
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
@@ -210,6 +217,7 @@ class LlmBot:
         self.dp.message.register(self.get_params, Command("getparams"))
         self.dp.message.register(self.set_temperature, Command("settemperature"))
         self.dp.message.register(self.set_top_p, Command("settopp"))
+        self.dp.message.register(self.set_email, Command("setemail"))
         self.dp.message.register(self.sub_info, Command("subinfo"))
         self.dp.message.register(self.sub_buy, Command("subbuy"))
         self.dp.message.register(self.history, Command("history"))
@@ -220,9 +228,22 @@ class LlmBot:
         self.dp.callback_query.register(self.set_character_button_handler, F.data.startswith("setcharacter:"))
         self.dp.callback_query.register(self.set_temperature_button_handler, F.data.startswith("settemperature:"))
         self.dp.callback_query.register(self.set_top_p_button_handler, F.data.startswith("settopp:"))
-        self.dp.callback_query.register(self.sub_buy_proceed, F.data.startswith("buy:"))
+        self.dp.callback_query.register(self.yookassa_sub_buy_proceed, F.data.startswith("buy:yookassa"))
+
+        # Платежи
+        self.scheduler = None
+        self.yookassa = None
+        if yookassa_config_path and os.path.exists(yookassa_config_path):
+            self.buy_kb.add(InlineKeyboardButton(text="Купить (из России)", callback_data="buy:yookassa"))
+            with open(yookassa_config_path) as r:
+                config = json.load(r)
+                self.yookassa = YookassaHandler(**config)
 
     async def start_polling(self):
+        self.scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+        if self.yookassa is not None:
+            self.scheduler.add_job(self.yookassa_check_payments, trigger="interval", seconds=10)
+        self.scheduler.start()
         self.bot_info = await self.bot.get_me()
         await self.dp.start_polling(self.bot)
 
@@ -394,10 +415,22 @@ class LlmBot:
 
     async def sub_buy(self, message: Message):
         user_id = message.from_user.id
+        email = self.db.get_email(user_id)
+        if not email:
+            await message.reply("Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек.")
+            return
+
+        chat_id = message.chat.id
+        is_chat = chat_id != user_id
+        if is_chat:
+            await message.reply("Подписку можно купить только в переписке с самим ботом!")
+            return
+
         remaining_seconds = self.db.get_subscription_info(user_id)
         if remaining_seconds > 0:
             await message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
             return
+
         template = "- *{model}*: {count} сообщений каждые {hours} часа"
         sub_limits = [
             template.format(
@@ -405,12 +438,69 @@ class LlmBot:
             )
             for model, limit in self.limits.items()
         ]
-        description = BUT_DESCRIPTION.format(sub_limits="\n".join(sub_limits))
-        text = BUY_TITLE + "\n\n" + description
-        await message.reply(text, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
+        description = SUB_DESCRIPTION.format(sub_limits="\n".join(sub_limits), price=SUB_PRICE)
+        await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
-    async def sub_buy_proceed(self, callback: CallbackQuery):
-        await callback.message.reply("Ссылка для оплаты: <ссылка>")
+    async def yookassa_sub_buy_proceed(self, callback: CallbackQuery):
+        assert self.yookassa
+        user_id = callback.from_user.id
+        email = self.db.get_email(user_id)
+        if not email:
+            await callback.message.reply("Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек.")
+            return
+
+        chat_id = callback.message.chat.id
+        is_chat = chat_id != user_id
+        if is_chat:
+            await callback.message.reply("Подписку можно купить только в переписке с самим ботом!")
+            return
+
+        remaining_seconds = self.db.get_subscription_info(user_id)
+        if remaining_seconds > 0:
+            await callback.message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
+            return
+
+        timestamp = self.db.get_current_ts()
+        title = SUB_TITLE.format(user_id=user_id)
+        payment_data = self.yookassa.create_payment(SUB_PRICE, title, email=email, bot_username=self.bot_info.username)
+        payment_id = payment_data["id"]
+        try:
+            url = payment_data["confirmation"]["confirmation_url"]
+            status = payment_data["status"]
+            self.db.save_payment(
+                payment_id=payment_id, user_id=user_id, chat_id=chat_id, url=url, status=status, timestamp=timestamp
+            )
+            await callback.message.reply(f"Ссылка для оплаты: {url}")
+        except Exception:
+            self.yookassa.yookassa.cancel_payment(payment_id)
+
+    async def yookassa_check_payments(self):
+        assert self.yookassa
+
+        payments = self.db.get_waiting_payments()
+
+        for payment in payments:
+            status = self.yookassa.check_payment(payment.payment_id)
+            self.db.set_payment_status(
+                payment_id=payment.payment_id, status=status, internal_status=payment.internal_status
+            )
+            if status == YookassaStatus.SUCCEEDED:
+                self.db.subscribe_user(payment.user_id, 7 * 86400)
+                text = "Платёж получен, подписка выдана! Узнать статус: /subinfo"
+                await self.bot.send_message(chat_id=payment.chat_id, text=text)
+                self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
+            elif status == YookassaStatus.CANCELED:
+                await self.bot.send_message(chat_id=payment.chat_id, text="Платёж отменён!")
+                self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
+
+    async def set_email(self, message: Message):
+        email = message.text.replace("/setemail", "").strip()
+        is_valid = "@" in parseaddr(email)[1]
+        if not is_valid:
+            await message.reply("Некорректный e-mail!")
+            return
+        self.db.set_email(message.from_user.id, email)
+        await message.reply(f"Спасибо! Адрес задан: {email}")
 
     #
     # Параметры генерации
@@ -450,6 +540,7 @@ class LlmBot:
     async def _check_tools(self, messages, model: str):
         messages = copy.deepcopy(messages)
         messages = self._replace_images(messages)
+        messages = self._fix_broken_tool_calls(messages)
         tools = [t.get_specification() for t in self.tools.values()]
         chat_completion = await self.clients[model].chat.completions.create(
             model=self.model_names[model], messages=messages, tools=tools, tool_choice="auto", max_tokens=2048
@@ -841,6 +932,7 @@ def main(
     chunk_size: int = 3500,
     characters_path: str = None,
     tools_config_path: str = None,
+    yookassa_config_path: str = None,
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
@@ -850,6 +942,7 @@ def main(
         chunk_size=chunk_size,
         characters_path=characters_path,
         tools_config_path=tools_config_path,
+        yookassa_config_path=yookassa_config_path,
     )
     asyncio.run(bot.start_polling())
 

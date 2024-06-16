@@ -4,3 +4,5 @@ sqlalchemy==2.0.15
 transformers==4.38.1
 fire==0.5.0
 tiktoken==0.7.0
+yookassa==3.2.0
+apscheduler==3.6.3

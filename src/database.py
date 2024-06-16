@@ -93,6 +93,25 @@ class Subscriptions(Base):
     until_timestamp = Column(Integer, nullable=False)
 
 
+class Payments(Base):
+    __tablename__ = "Payments"
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(Integer, nullable=False)
+    payment_id = Column(String, nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    chat_id = Column(Integer, nullable=False)
+    status = Column(String, nullable=False)
+    internal_status = Column(String, nullable=False)
+    url = Column(String, nullable=True)
+
+
+class Emails(Base):
+    __tablename__ = "Emails"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    email = Column(String, nullable=False)
+
+
 class Database:
     def __init__(self, db_path: str):
         self.engine = create_engine(f"sqlite:///{db_path}")
@@ -102,6 +121,47 @@ class Database:
     @staticmethod
     def get_current_ts():
         return int(datetime.now().replace(tzinfo=timezone.utc).timestamp())
+
+    def set_email(self, user_id: int, email: str):
+        with self.Session() as session:
+            obj = Emails(user_id=user_id, email=email)
+            session.add(obj)
+            session.commit()
+
+    def get_email(self, user_id: int):
+        with self.Session() as session:
+            obj = session.query(Emails).filter(Emails.user_id == user_id).first()
+            if not obj:
+                return None
+            return obj.email
+
+    def save_payment(self, payment_id: str, user_id: int, chat_id: int, status: str, url: str, timestamp: int):
+        with self.Session() as session:
+            new_payment = Payments(
+                payment_id=payment_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                status=status,
+                internal_status="waiting",
+                url=url,
+                timestamp=timestamp,
+            )
+            session.add(new_payment)
+            session.commit()
+
+    def get_waiting_payments(self):
+        with self.Session() as session:
+            payments = session.query(Payments).filter(Payments.internal_status == "waiting").all()
+            return payments
+
+    def set_payment_status(self, payment_id: str, status: str, internal_status: str):
+        with self.Session() as session:
+            payment = session.query(Payments).filter(Payments.payment_id == payment_id).first()
+            if payment is None:
+                return
+            payment.status = status
+            payment.internal_status = internal_status
+            session.commit()
 
     def create_conv_id(self, user_id):
         conv_id = secrets.token_hex(nbytes=16)
