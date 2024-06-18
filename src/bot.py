@@ -29,6 +29,7 @@ from src.payments import YookassaHandler, YookassaStatus
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
+DEFAULT_HISTORY_MAX_TOKENS = 6144
 DEFAULT_MESSAGE_COUNT_LIMIT = {
     "standard": {"limit": 1000, "interval": 86400},
     "subscribed": {"limit": 1000, "interval": 86400},
@@ -41,22 +42,29 @@ START_TEMPLATE = """
 Текущая модель: {model}
 Осталось сообщений: {message_count}
 
+Лимиты:
+{sub_limits}
+
 Доступные команды:
+/help - вызов этого сообщения
 /reset - очистить историю сообщений с ботом
 /setmodel - выбрать модель
 /getmodel - узнать текущую модель
 /setcharacter - задать персонажа
-/setsystem ... - задать системный промпт
+/setsystem ... - задать системный промпт, нужно писать в этом же сообщении
 /getsystem - узнать текущий системный промпт
 /resetsystem - сбросить системный промпт к стандартному
-/setshortname ... - задать имя бота
+/setshortname ... - задать имя бота, нужно писать в этом же сообщении
 /getshortname - узнать имя ботя
 /getcount - узнать текущий лимит сообщений
 /getparams - узнать текущие параметры генерации
 /settemperature - задать температуру
+/subinfo - информация о текущей подписке
+/subbuy - купить подписку
+/setemail ... - задать e-mail, чтобы купить подписку, нужно писать в этом же сообщении
 
-Исходники: https://github.com/IlyaGusev/saiga_bot
-Модель по умолчанию: https://huggingface.co/IlyaGusev/saiga_llama3_8b
+Исходники: [saiga_bot](https://github.com/IlyaGusev/saiga_bot)
+Модель по умолчанию: [saiga_llama3_8b](https://huggingface.co/IlyaGusev/saiga_llama3_8b)
 
 По всем вопросам писать @YallenGusev
 """
@@ -120,7 +128,6 @@ class LlmBot:
         bot_token: str,
         client_config_path: str,
         db_path: str,
-        history_max_tokens: int,
         chunk_size: int,
         characters_path: str,
         tools_config_path: str,
@@ -135,12 +142,14 @@ class LlmBot:
         self.can_handle_tools = dict()
         self.default_prompts = dict()
         self.default_params = dict()
+        self.history_max_tokens = dict()
         self.limits = dict()
         for model_name, config in client_config.items():
             self.model_names[model_name] = config.pop("model_name")
             self.can_handle_images[model_name] = config.pop("can_handle_images", False)
             self.can_handle_tools[model_name] = config.pop("can_handle_tools", False)
             self.default_prompts[model_name] = config.pop("system_prompt", "")
+            self.history_max_tokens[model_name] = config.pop("history_max_tokens", DEFAULT_HISTORY_MAX_TOKENS)
             if "params" in config:
                 self.default_params[model_name] = config.pop("params")
             self.limits[model_name] = config.pop("message_count_limit", DEFAULT_MESSAGE_COUNT_LIMIT)
@@ -167,7 +176,6 @@ class LlmBot:
                 self.characters = json.load(r)
 
         # Параметры
-        self.history_max_tokens = history_max_tokens
         self.chunk_size = chunk_size
 
         # База
@@ -253,8 +261,13 @@ class LlmBot:
         self.db.create_conv_id(chat_id)
         model = self.db.get_current_model(chat_id)
         remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
-        content = START_TEMPLATE.format(model=model, message_count=remaining_count)
-        await message.reply(content)
+        sub_limits = self.get_limits()
+        content = START_TEMPLATE.format(
+            model=model,
+            message_count=remaining_count,
+            sub_limits=sub_limits,
+        )
+        await message.reply(content, parse_mode=ParseMode.MARKDOWN)
 
     #
     # История сообщений
@@ -413,6 +426,16 @@ class LlmBot:
             text = f"Подписка активирована! Осталось {remaining_seconds//3600}ч"
         await message.reply(text)
 
+    def get_limits(self):
+        template = "- *{model}*: {count} сообщений каждые {hours} часа"
+        sub_limits = [
+            template.format(
+                model=model, count=limit["subscribed"]["limit"], hours=limit["subscribed"]["interval"] // 3600
+            )
+            for model, limit in self.limits.items()
+        ]
+        return "\n".join(sub_limits)
+
     async def sub_buy(self, message: Message):
         user_id = message.from_user.id
         email = self.db.get_email(user_id)
@@ -431,14 +454,8 @@ class LlmBot:
             await message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
             return
 
-        template = "- *{model}*: {count} сообщений каждые {hours} часа"
-        sub_limits = [
-            template.format(
-                model=model, count=limit["subscribed"]["limit"], hours=limit["subscribed"]["interval"] // 3600
-            )
-            for model, limit in self.limits.items()
-        ]
-        description = SUB_DESCRIPTION.format(sub_limits="\n".join(sub_limits), price=SUB_PRICE)
+        sub_limits = self.get_limits()
+        description = SUB_DESCRIPTION.format(sub_limits=sub_limits, price=SUB_PRICE)
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
     async def yookassa_sub_buy_proceed(self, callback: CallbackQuery):
@@ -446,7 +463,9 @@ class LlmBot:
         user_id = callback.from_user.id
         email = self.db.get_email(user_id)
         if not email:
-            await callback.message.reply("Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек.")
+            await callback.message.reply(
+                "Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек."
+            )
             return
 
         chat_id = callback.message.chat.id
@@ -889,7 +908,7 @@ class LlmBot:
         history = self._merge_messages(history)
         assert history
         tokens_count = self._count_tokens(history, model=model)
-        while tokens_count > self.history_max_tokens and len(history) >= 3:
+        while tokens_count > self.history_max_tokens[model] and len(history) >= 3:
             history = history[2:]
             tokens_count = self._count_tokens(history, model=model)
         assert history
@@ -928,7 +947,6 @@ def main(
     bot_token: str,
     client_config_path: str,
     db_path: str,
-    history_max_tokens: int = 6144,
     chunk_size: int = 3500,
     characters_path: str = None,
     tools_config_path: str = None,
@@ -938,7 +956,6 @@ def main(
         bot_token=bot_token,
         client_config_path=client_config_path,
         db_path=db_path,
-        history_max_tokens=history_max_tokens,
         chunk_size=chunk_size,
         characters_path=characters_path,
         tools_config_path=tools_config_path,
