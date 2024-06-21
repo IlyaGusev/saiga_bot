@@ -742,8 +742,10 @@ class LlmBot:
 
             history = self._fix_image_roles(history)
             history = self._fix_broken_tool_calls(history)
+            if tools:
+                params["tools"] = tools
             answer = await self._query_api(
-                model=model, messages=history, system_prompt=system_prompt, tools=tools, **params
+                model=model, messages=history, system_prompt=system_prompt, **params
             )
 
             chunk_size = self.chunk_size
