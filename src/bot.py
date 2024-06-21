@@ -581,7 +581,7 @@ class LlmBot:
         if not current_value:
             await message.reply("Инструменты включены!")
         else:
-            await message.reply("Инструменты выключены!")
+            await message.reply("Инструменты выключены! Чтобы включить их назад, снова наберите /tools")
 
     async def _check_tools(self, messages, model: str):
         messages = copy.deepcopy(messages)
@@ -787,6 +787,7 @@ class LlmBot:
         chat_completion = await self.clients[model].chat.completions.create(
             model=self.model_names[model], messages=messages, **kwargs
         )
+        assert chat_completion.choices[0].message.content, str(messages)
         answer = chat_completion.choices[0].message.content
         print(
             model,
