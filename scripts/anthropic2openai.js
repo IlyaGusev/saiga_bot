@@ -6,8 +6,6 @@ addEventListener('fetch', (event) => {
 
 const CLAUDE_API_KEY = ''; // Optional: default claude api key if you don't want to pass it in the request header
 const CLAUDE_BASE_URL = 'https://api.anthropic.com'; // Change this if you are using a self-hosted endpoint
-const MAX_TOKENS = 4096; // Max tokens to sample, change it if you want to sample more tokens, maximum is 4096.
-
 
 const stop_reason_map = {
   end_turn: 'stop',
@@ -68,7 +66,7 @@ async function handleRequest(request) {
     }
 
     const requestBody = await request.json();
-    const { model, messages, temperature, stop } = requestBody;
+    const { model, messages, temperature, stop, max_tokens, top_p} = requestBody;
 
     let systemPrompt = "The assistant is Claude created by Anthropic";
     let newMessages = messages;
@@ -76,13 +74,13 @@ async function handleRequest(request) {
         systemPrompt = messages[0].content;
         newMessages = messages.slice(1);
     }
-
     const claudeRequestBody = {
       messages: newMessages,
       system: systemPrompt,
       model: model,
       temperature: temperature,
-      max_tokens: MAX_TOKENS,
+      max_tokens: max_tokens,
+      top_p: top_p,
       stop_sequences: stop
     };
     console.log(claudeRequestBody);
@@ -98,6 +96,12 @@ async function handleRequest(request) {
       body: JSON.stringify(claudeRequestBody),
     });
     
+    if (!claudeResponse.ok) {
+      const errorText = await claudeResponse.text();
+      console.error(`Error: ${errorText}`);
+      throw new Error(`HTTP error! status: ${claudeResponse.status}, details: ${errorText}`);
+    }
+
     const claudeResponseBody = await claudeResponse.json();
     console.log(claudeResponseBody);
     const openAIResponseBody = claudeToChatGPTResponse(claudeResponseBody);

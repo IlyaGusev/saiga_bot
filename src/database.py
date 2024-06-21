@@ -4,7 +4,7 @@ import copy
 from typing import Optional
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, MetaData, func
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, MetaData, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
@@ -46,34 +46,22 @@ class Conversations(Base):
     timestamp = Column(Integer, nullable=False)
 
 
-class SystemPrompts(Base):
-    __tablename__ = "system_prompts"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    model = Column(String, nullable=True, index=True)
-    prompt = Column(Text, nullable=False)
-
-
-class GenerationParameters(Base):
-    __tablename__ = "generation_parameters"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    model = Column(String, nullable=True, index=True)
-    parameters = Column(Text, nullable=False)
-
-
-class ShortNames(Base):
-    __tablename__ = "short_names"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    short_name = Column(String)
-
-
 class Models(Base):
     __tablename__ = "models"
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, nullable=False, unique=True, index=True)
     model = Column(String, nullable=False)
+
+
+class ModelParameters(Base):
+    __tablename__ = "model_parameters"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    model = Column(String, nullable=True, index=True)
+    prompt = Column(Text, nullable=True)
+    short_name = Column(String, nullable=True)
+    generation_parameters = Column(Text, nullable=True)
+    enable_tools = Column(Boolean, nullable=True)
 
 
 class Likes(Base):
@@ -228,83 +216,111 @@ class Database:
                 session.add(new_model)
             session.commit()
 
-    def get_system_prompt(self, user_id, default_prompts):
+    def get_current_model_parameters(self, user_id):
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            prompt = (
-                session.query(SystemPrompts)
-                .filter(SystemPrompts.user_id == user_id)
-                .filter(SystemPrompts.model == current_model)
+            params = (
+                session.query(ModelParameters)
+                .filter(ModelParameters.user_id == user_id)
+                .filter(ModelParameters.model == current_model)
                 .first()
             )
-            if prompt:
-                return prompt.prompt
-            return default_prompts.get(current_model, "")
+            if params:
+                return params
+            return None
+
+    def get_system_prompt(self, user_id, default_prompts):
+        current_model = self.get_current_model(user_id)
+        params = self.get_current_model_parameters(user_id)
+        if params and params.prompt:
+            return params.prompt
+        return default_prompts.get(current_model, "")
 
     def set_system_prompt(self, user_id: int, text: str):
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            prompt = (
-                session.query(SystemPrompts)
-                .filter(SystemPrompts.user_id == user_id)
-                .filter(SystemPrompts.model == current_model)
+            params = (
+                session.query(ModelParameters)
+                .filter(ModelParameters.user_id == user_id)
+                .filter(ModelParameters.model == current_model)
                 .first()
             )
-            if prompt:
-                prompt.prompt = text
+            if params:
+                params.prompt = text
             else:
-                new_prompt = SystemPrompts(user_id=user_id, prompt=text, model=current_model)
-                session.add(new_prompt)
+                params = ModelParameters(user_id=user_id, model=current_model, prompt=text)
+                session.add(params)
             session.commit()
 
     def get_short_name(self, user_id: int):
-        with self.Session() as session:
-            name = session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
-            if name:
-                return name.short_name
-            return DEFAULT_SHORT_NAME
+        params = self.get_current_model_parameters(user_id)
+        if params and params.short_name:
+            return params.short_name
+        return DEFAULT_SHORT_NAME
 
     def set_short_name(self, user_id: int, text: str):
+        current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            name = session.query(ShortNames).filter(ShortNames.user_id == user_id).first()
-            if name:
-                name.short_name = text
+            params = (
+                session.query(ModelParameters)
+                .filter(ModelParameters.user_id == user_id)
+                .filter(ModelParameters.model == current_model)
+                .first()
+            )
+            if params:
+                params.short_name = text
             else:
-                new_name = ShortNames(user_id=user_id, short_name=text)
-                session.add(new_name)
+                params = ModelParameters(user_id=user_id, model=current_model, short_name=text)
+                session.add(params)
             session.commit()
 
     def set_parameters(self, user_id: int, default_params, **kwargs):
         current_model = self.get_current_model(user_id)
-        params = self.get_parameters(user_id, default_params)
+        generation_parameters = self.get_parameters(user_id, default_params)
         for key, value in kwargs.items():
-            params[key] = value
+            generation_parameters[key] = value
         with self.Session() as session:
-            parameters = (
-                session.query(GenerationParameters)
-                .filter(GenerationParameters.user_id == user_id)
-                .filter(GenerationParameters.model == current_model)
+            params = (
+                session.query(ModelParameters)
+                .filter(ModelParameters.user_id == user_id)
+                .filter(ModelParameters.model == current_model)
                 .first()
             )
-            if parameters:
-                parameters.parameters = json.dumps(params)
+            if params:
+                params.generation_parameters = json.dumps(generation_parameters)
             else:
-                parameters = GenerationParameters(user_id=user_id, model=current_model, parameters=json.dumps(params))
-                session.add(parameters)
+                params = ModelParameters(user_id=user_id, model=current_model, generation_parameters=json.dumps(params))
+                session.add(params)
             session.commit()
 
     def get_parameters(self, user_id: int, default_params):
         current_model = self.get_current_model(user_id)
+        params = self.get_current_model_parameters(user_id)
+        if params and params.generation_parameters:
+            return json.loads(params.generation_parameters)
+        return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
+
+    def are_tools_enabled(self, user_id: int):
+        params = self.get_current_model_parameters(user_id)
+        if params and params.enable_tools is not None:
+            return params.enable_tools
+        return True
+
+    def set_enable_tools(self, user_id: int, value: bool):
+        current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            parameters = (
-                session.query(GenerationParameters)
-                .filter(GenerationParameters.user_id == user_id)
-                .filter(GenerationParameters.model == current_model)
+            params = (
+                session.query(ModelParameters)
+                .filter(ModelParameters.user_id == user_id)
+                .filter(ModelParameters.model == current_model)
                 .first()
             )
-            if parameters:
-                return json.loads(parameters.parameters)
-            return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
+            if params:
+                params.enable_tools = value
+            else:
+                params = ModelParameters(user_id=user_id, model=current_model, enable_tools=value)
+                session.add(params)
+            session.commit()
 
     def save_user_message(self, content: str, conv_id: str, user_id: int, user_name: str = None):
         with self.Session() as session:

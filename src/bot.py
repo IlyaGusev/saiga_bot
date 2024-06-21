@@ -62,6 +62,13 @@ START_TEMPLATE = """
 /subinfo - информация о текущей подписке
 /subbuy - купить подписку
 /setemail ... - задать e-mail, чтобы купить подписку, нужно писать в этом же сообщении
+/tools - включить/выключить инструменты (плагины)
+
+Инструменты:
+- Поиск в интернете
+- Чтение страниц в интернете
+- Текущая дата и время
+- Генерация изображений с DALL-E
 
 Исходники: [saiga_bot](https://github.com/IlyaGusev/saiga_bot)
 Модель по умолчанию: [saiga_llama3_8b](https://huggingface.co/IlyaGusev/saiga_llama3_8b)
@@ -228,6 +235,7 @@ class LlmBot:
         self.dp.message.register(self.set_email, Command("setemail"))
         self.dp.message.register(self.sub_info, Command("subinfo"))
         self.dp.message.register(self.sub_buy, Command("subbuy"))
+        self.dp.message.register(self.toogle_tools, Command("tools"))
         self.dp.message.register(self.history, Command("history"))
         self.dp.message.register(self.generate)
 
@@ -250,7 +258,7 @@ class LlmBot:
     async def start_polling(self):
         self.scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
         if self.yookassa is not None:
-            self.scheduler.add_job(self.yookassa_check_payments, trigger="interval", seconds=10)
+            self.scheduler.add_job(self.yookassa_check_payments, trigger="interval", seconds=30)
         self.scheduler.start()
         self.bot_info = await self.bot.get_me()
         await self.dp.start_polling(self.bot)
@@ -556,6 +564,19 @@ class LlmBot:
     # Инструменты
     #
 
+    async def toogle_tools(self, message: Message):
+        chat_id = message.chat.id
+        model = self.db.get_current_model(chat_id)
+        if not self.can_handle_tools[model]:
+            await message.reply(f"Для модели {model} инструменты недоступны.")
+            return
+        current_value = self.db.are_tools_enabled(chat_id)
+        self.db.set_enable_tools(chat_id, not current_value)
+        if not current_value:
+            await message.reply("Инструменты включены!")
+        else:
+            await message.reply("Инструменты выключены!")
+
     async def _check_tools(self, messages, model: str):
         messages = copy.deepcopy(messages)
         messages = self._replace_images(messages)
@@ -700,7 +721,7 @@ class LlmBot:
         placeholder = await message.reply("💬")
 
         try:
-            if self.can_handle_tools[model] and self.tools:
+            if self.can_handle_tools[model] and self.tools and self.db.are_tools_enabled(chat_id):
                 history = await self._call_tools(
                     history=history,
                     model=model,
@@ -877,7 +898,7 @@ class LlmBot:
             if role == "user" and content is None:
                 continue
             if role == "user" and isinstance(content, str) and m["user_name"]:
-                m["content"] = "{}: {}".format(m["user_name"], content)
+                m["content"] = "Из чата пишет {}: {}".format(m["user_name"], content)
         return messages
 
     @staticmethod
