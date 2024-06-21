@@ -26,6 +26,9 @@ function claudeToChatGPTResponse(claudeResponse) {
   const timestamp = Math.floor(Date.now() / 1000);
   const promptTokens = claudeResponse["usage"]["input_tokens"];
   const completionTokens = claudeResponse["usage"]["output_tokens"];
+  const stopReason = claudeResponse['stop_reason'];
+  const isToolUse = stopReason == "tool_use";
+
   const result = {
     id: claudeResponse["id"],
     created: timestamp,
@@ -38,16 +41,31 @@ function claudeToChatGPTResponse(claudeResponse) {
     choices: [
       {
         index: 0,
-        finish_reason: claudeResponse['stop_reason']
-          ? stop_reason_map[claudeResponse['stop_reason']]
+        finish_reason: stopReason
+          ? stop_reason_map[stopReason]
           : null,
       },
     ],
   };
-  const message = {
+  var message = {
     role: 'assistant',
     content: completion,
   };
+  if (isToolUse) {
+    message.tool_calls = [];
+    console.log(claudeResponse["content"]);
+    for (var m of claudeResponse["content"]) {
+      if (m["type"] == "tool_use") {
+        message.tool_calls.push({
+          id: m["id"],
+          function: {
+            name: m["name"],
+            arguments: JSON.stringify(m["input"])
+          }
+        })
+      }
+    }
+  }
   result.object = 'chat.completion';
   result.choices[0].message = message;
   return result;
@@ -66,7 +84,7 @@ async function handleRequest(request) {
     }
 
     const requestBody = await request.json();
-    const { model, messages, temperature, stop, max_tokens, top_p} = requestBody;
+    const { model, messages, temperature, stop, max_tokens, top_p, tools} = requestBody;
 
     let systemPrompt = "The assistant is Claude created by Anthropic";
     let newMessages = messages;
@@ -74,6 +92,54 @@ async function handleRequest(request) {
         systemPrompt = messages[0].content;
         newMessages = messages.slice(1);
     }
+    let newNewMessages = [];
+    for (var m of newMessages) {
+      if (m.role == "tool") {
+        m.role = "user";
+        const oldContent = m.content;
+        m.content = [{
+          tool_use_id: m.tool_call_id,
+          type: "tool_result",
+          content: oldContent
+        }]
+        delete m.tool_call_id
+        delete m.name
+      }
+      if (m.role == "assistant" && "tool_calls" in m) {
+        const newMessage = {
+          role: "assistant",
+          content: [{
+            type: "text",
+            text: "Calling tools"
+          }, {
+            type: "tool_use",
+            id: m.tool_calls[0].id,
+            name: m.tool_calls[0].function.name,
+            input: JSON.parse(m.tool_calls[0].function.arguments)
+          }]
+        }
+        newNewMessages.push(newMessage)
+        continue;
+      }
+      newNewMessages.push(m)
+    }
+    newMessages = newNewMessages;
+
+    var newTools = [];
+    if (tools) {
+        for (var tool of tools) {
+          const name = tool.function.name;
+          const description = tool.function.description;
+          const parameters = tool.function.parameters;
+          newTools.push({
+            name: name,
+            description: description,
+            input_schema: parameters
+          })
+        }
+    }
+    console.log(newTools);
+
     const claudeRequestBody = {
       messages: newMessages,
       system: systemPrompt,
@@ -81,7 +147,8 @@ async function handleRequest(request) {
       temperature: temperature,
       max_tokens: max_tokens,
       top_p: top_p,
-      stop_sequences: stop
+      stop_sequences: stop,
+      tools: newTools
     };
     console.log(claudeRequestBody);
 

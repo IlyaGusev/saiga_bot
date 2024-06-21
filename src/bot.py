@@ -564,6 +564,12 @@ class LlmBot:
     # Инструменты
     #
 
+    def _get_tools(self, chat_id):
+        model = self.db.get_current_model(chat_id)
+        if self.can_handle_tools[model] and self.tools and self.db.are_tools_enabled(chat_id):
+            return [t.get_specification() for t in self.tools.values()]
+        return None
+
     async def toogle_tools(self, message: Message):
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
@@ -721,7 +727,8 @@ class LlmBot:
         placeholder = await message.reply("💬")
 
         try:
-            if self.can_handle_tools[model] and self.tools and self.db.are_tools_enabled(chat_id):
+            tools = self._get_tools(chat_id)
+            if tools:
                 history = await self._call_tools(
                     history=history,
                     model=model,
@@ -735,7 +742,9 @@ class LlmBot:
 
             history = self._fix_image_roles(history)
             history = self._fix_broken_tool_calls(history)
-            answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
+            answer = await self._query_api(
+                model=model, messages=history, system_prompt=system_prompt, tools=tools, **params
+            )
 
             chunk_size = self.chunk_size
             answer_parts = [answer[i : i + chunk_size] for i in range(0, len(answer), chunk_size)]
