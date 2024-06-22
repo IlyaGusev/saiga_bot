@@ -272,10 +272,7 @@ class LlmBot:
         remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
         sub_limits = self.get_limits()
         content = START_TEMPLATE.format(
-            model=model,
-            message_count=remaining_count,
-            sub_limits=sub_limits,
-            contact_username=CONTACT_USERNAME
+            model=model, message_count=remaining_count, sub_limits=sub_limits, contact_username=CONTACT_USERNAME
         )
         await message.reply(content, parse_mode=ParseMode.MARKDOWN)
 
@@ -744,11 +741,9 @@ class LlmBot:
 
             history = self._fix_image_roles(history)
             history = self._fix_broken_tool_calls(history)
-            if tools:
+            if tools and "gpt" not in model:
                 params["tools"] = tools
-            answer = await self._query_api(
-                model=model, messages=history, system_prompt=system_prompt, **params
-            )
+            answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
 
             chunk_size = self.chunk_size
             answer_parts = [answer[i : i + chunk_size] for i in range(0, len(answer), chunk_size)]

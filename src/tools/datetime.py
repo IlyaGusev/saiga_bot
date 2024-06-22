@@ -3,7 +3,7 @@ import json
 from typing import Dict
 from datetime import datetime
 
-import requests
+import aiohttp
 
 from src.tools.base import Tool
 
@@ -39,8 +39,11 @@ class DateTimeTool(Tool):
         url = f"https://worldtimeapi.org/api/timezone/{timezone}"
 
         try:
-            wtr = requests.get(url).json().get("datetime")
-            wtr_obj = datetime.strptime(wtr, "%Y-%m-%dT%H:%M:%S.%f%z")
-            return wtr_obj.strftime("Date: %Y-%m-%d, time: %H:%M:%S")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    result = await resp.json()
+                    wtr = result.get("datetime")
+                    wtr_obj = datetime.strptime(wtr, "%Y-%m-%dT%H:%M:%S.%f%z")
+                    return wtr_obj.strftime("Date: %Y-%m-%d, time: %H:%M:%S")
         except Exception:
             return json.dumps({"result": "No result was found"})

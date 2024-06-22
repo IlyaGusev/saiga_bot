@@ -17,10 +17,10 @@ class DalleTool(Tool):
             "type": "function",
             "function": {
                 "name": "dalle",
-                "description": "When there is an explicit command to generate an image,"
+                "description": "When there is an explicit command to generate/draw an image,"
                 "create a prompt that dalle can use to generate the image.\n"
-                "The generated prompt sent to dalle should be very detailed, and around 50 words long.\n"
-                "Do not call this tool if not explicitly asked in the last user message.\n"
+                "The prompt sent to dalle should be very detailed, and around 50 words long.\n"
+                "Only call this tool if the user explicitly asked to draw the image the last message.\n"
                 "If you see <image_placeholder>, it means the image was already generated.",
                 "parameters": {
                     "type": "object",
