@@ -37,6 +37,7 @@ DEFAULT_MESSAGE_COUNT_LIMIT = {
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 DALLE_DAILY_LIMIT = 5
+CONTACT_USERNAME = "YallenGusev"
 START_TEMPLATE = """
 Привет! Я Сайга, бот с разными языковыми моделями.
 Текущая модель: {model}
@@ -73,7 +74,7 @@ START_TEMPLATE = """
 Исходники: [saiga_bot](https://github.com/IlyaGusev/saiga_bot)
 Модель по умолчанию: [saiga_llama3_8b](https://huggingface.co/IlyaGusev/saiga_llama3_8b)
 
-По всем вопросам писать @YallenGusev
+По всем вопросам писать @{contact_username}
 """
 
 IMAGE_PLACEHOLDER = "<image_placeholder>"
@@ -274,6 +275,7 @@ class LlmBot:
             model=model,
             message_count=remaining_count,
             sub_limits=sub_limits,
+            contact_username=CONTACT_USERNAME
         )
         await message.reply(content, parse_mode=ParseMode.MARKDOWN)
 
@@ -770,7 +772,9 @@ class LlmBot:
 
         except Exception:
             traceback.print_exc()
-            await placeholder.edit_text("Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться.")
+            text = "Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться."
+            text += f" Попробуйте сделать /reset и пришлите @{CONTACT_USERNAME} вот это число: {chat_id}"
+            await placeholder.edit_text(text)
 
     async def _query_api(self, model, messages, system_prompt: str, **kwargs):
         assert messages
@@ -787,7 +791,7 @@ class LlmBot:
         chat_completion = await self.clients[model].chat.completions.create(
             model=self.model_names[model], messages=messages, **kwargs
         )
-        assert chat_completion.choices[0].message.content, str(messages)
+        assert chat_completion.choices[0].message.content, str(chat_completion)
         answer = chat_completion.choices[0].message.content
         print(
             model,
