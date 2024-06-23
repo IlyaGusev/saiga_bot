@@ -1,8 +1,9 @@
 import base64
+import json
 from typing import List, Any
 
 import requests
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from src.tools.base import Tool
 
@@ -40,13 +41,16 @@ class DalleTool(Tool):
         }
 
     async def __call__(self, prompt: str, prompt_russian: str) -> str:
-        response = await self.client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1,
-        )
+        try:
+            response = await self.client.images.generate(
+                model="dall-e-3",
+                prompt=prompt,
+                size="1024x1024",
+                quality="standard",
+                n=1,
+            )
+        except BadRequestError as e:
+            return json.dumps(e.response.json()["error"]["message"])
         image_url = response.data[0].url
         encoded_image = self.encode_image(image_url)
         content = [

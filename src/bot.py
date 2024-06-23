@@ -65,11 +65,12 @@ START_TEMPLATE = """
 /setemail ... - задать e-mail, чтобы купить подписку, нужно писать в этом же сообщении
 /tools - включить/выключить инструменты (плагины)
 
-Инструменты:
+Инструменты, доступные для gpt-4o и claude-3-5-sonnet:
 - Поиск в интернете
 - Чтение страниц в интернете
 - Текущая дата и время
 - Генерация изображений с DALL-E
+- Интерпретатор Python
 
 Исходники: [saiga_bot](https://github.com/IlyaGusev/saiga_bot)
 Модель по умолчанию: [saiga_llama3_8b](https://huggingface.co/IlyaGusev/saiga_llama3_8b)
@@ -602,6 +603,21 @@ class LlmBot:
 
         await placeholder.edit_text(f"Генерирую картинку по промпту: {kwargs['prompt_russian']}")
         function_response = await self.tools["dalle"](**kwargs)
+        if "image_url" not in function_response[1]:
+            text = f"Ошибка при вызове DALL-E: {function_response}"
+            new_message = await self.bot.send_message(
+                chat_id=chat_id,
+                reply_to_message_id=placeholder.message_id,
+                text=text
+            )
+            self.db.save_assistant_message(
+                content=text,
+                conv_id=conv_id,
+                message_id=new_message.message_id,
+                model="dalle",
+                reply_user_id=user_id,
+            )
+            return
         base64_image = function_response[1]["image_url"]["url"].replace("data:image/jpeg;base64,", "")
         image_data = base64.b64decode(base64_image)
         input_file = BufferedInputFile(image_data, filename="image.jpeg")
@@ -891,7 +907,7 @@ class LlmBot:
         for m in messages:
             content = m["content"]
             role = m["role"]
-            if role == prev_role:
+            if role == prev_role and role != "tool":
                 is_current_str = isinstance(content, str)
                 is_prev_str = isinstance(new_messages[-1]["content"], str)
                 if is_current_str and is_prev_str:

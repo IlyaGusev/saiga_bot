@@ -32,7 +32,9 @@ class TerrariumTool(Tool):
             "type": "function",
             "function": {
                 "name": "terrarium",
-                "description": "Calling Python interperter with an isolated environment",
+                "description": "Calling Python interperter with an isolated environment. "
+                "Use only when you need to calculate something or when explicitly asked. "
+                "Do not use this tool when code excecution is not actually needed",
                 "parameters": {
                     "type": "object",
                     "properties": {

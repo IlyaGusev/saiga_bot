@@ -84,46 +84,56 @@ async function handleRequest(request) {
     }
 
     const requestBody = await request.json();
-    const { model, messages, temperature, stop, max_tokens, top_p, tools} = requestBody;
+    let { model, messages, temperature, stop, max_tokens, top_p, tools} = requestBody;
 
-    let systemPrompt = "The assistant is Claude created by Anthropic";
+    let systemPrompt = "";
     let newMessages = messages;
     if (messages[0].role == "system") {
         systemPrompt = messages[0].content;
         newMessages = messages.slice(1);
     }
-    let newNewMessages = [];
-    for (var m of newMessages) {
+    messages = newMessages;
+
+    newMessages = [];
+    for (var m of messages) {
       if (m.role == "tool") {
         m.role = "user";
-        const oldContent = m.content;
-        m.content = [{
+        const part = {
           tool_use_id: m.tool_call_id,
           type: "tool_result",
-          content: oldContent
-        }]
+          content: m.content
+        };
+        if (newMessages.at(-1).content.at(-1).type == "tool_result") {
+          newMessages.at(-1).content.push(part);
+          continue
+        }
+        m.content = [part]
         delete m.tool_call_id
         delete m.name
       }
       if (m.role == "assistant" && "tool_calls" in m) {
-        const newMessage = {
-          role: "assistant",
-          content: [{
-            type: "text",
-            text: "Calling tools"
-          }, {
+        var content = []
+        content.push({
+          type: "text",
+          text: "Calling tools"
+        })
+        for (var call of m.tool_calls) {
+          content.push({
             type: "tool_use",
-            id: m.tool_calls[0].id,
-            name: m.tool_calls[0].function.name,
-            input: JSON.parse(m.tool_calls[0].function.arguments)
-          }]
-        }
-        newNewMessages.push(newMessage)
+            id: call.id,
+            name: call.function.name,
+            input: JSON.parse(call.function.arguments)
+          })
+        } 
+        newMessages.push({
+          role: "assistant",
+          content: content
+        })
         continue;
       }
-      newNewMessages.push(m)
+      newMessages.push(m)
     }
-    newMessages = newNewMessages;
+    messages = newMessages;
 
     var newTools = [];
     if (tools) {
@@ -138,17 +148,18 @@ async function handleRequest(request) {
           })
         }
     }
-    console.log(newTools);
+    tools = newTools;
+    console.log(tools);
 
     const claudeRequestBody = {
-      messages: newMessages,
+      messages: messages,
       system: systemPrompt,
       model: model,
       temperature: temperature,
       max_tokens: max_tokens,
       top_p: top_p,
       stop_sequences: stop,
-      tools: newTools
+      tools: tools
     };
     console.log(claudeRequestBody);
 
