@@ -22,6 +22,7 @@ from openai import AsyncOpenAI
 from transformers import AutoTokenizer
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from src.localization import Localization
 from src.tools import Tool
 from src.database import Database
 from src.payments import YookassaHandler, YookassaStatus
@@ -141,6 +142,7 @@ class LlmBot:
         characters_path: str,
         tools_config_path: str,
         yookassa_config_path: str,
+        localization_config_path: str,
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -168,6 +170,8 @@ class LlmBot:
         assert self.clients
         assert self.model_names
         assert self.default_prompts
+
+        self.localization = Localization(localization_config_path, "ru")
 
         # Инструменты
         self.tools = dict()
@@ -270,8 +274,8 @@ class LlmBot:
         chat_id = message.chat.id
         self.db.create_conv_id(chat_id)
         model = self.db.get_current_model(chat_id)
-        remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
-        sub_limits = self.get_limits()
+        remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
+        sub_limits = self._get_limits()
         content = START_TEMPLATE.format(
             model=model, message_count=remaining_count, sub_limits=sub_limits, contact_username=CONTACT_USERNAME
         )
@@ -284,32 +288,32 @@ class LlmBot:
     async def reset(self, message: Message):
         chat_id = message.chat.id
         self.db.create_conv_id(chat_id)
-        await message.reply("История сообщений сброшена!")
+        await message.reply(self.localization.RESET)
 
     async def history(self, message: Message):
         chat_id = message.chat.id
         is_chat = chat_id != message.from_user.id
         conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
-        if not history:
-            await message.reply("Нет истории!")
-            return
-        history = self._replace_images(history)
         model = self.db.get_current_model(chat_id)
-        history = self._prepare_history(history, model=model, is_chat=is_chat)
-        history = json.dumps(history, ensure_ascii=False)
-        history = self._truncate_text(history)
-        await message.reply(history)
+        message_text = self.localization.NO_HISTORY
+        if history:
+            history = self._replace_images(history)
+            history = self._prepare_history(history, model=model, is_chat=is_chat)
+            tokens_count = self._count_tokens(history, model=model)
+            history = json.dumps(history, ensure_ascii=False)
+            history = self._truncate_text(history)
+            message_text = self.localization.HISTORY.format(tokens_count=tokens_count, history=history)
+        await message.reply(message_text)
 
     async def _save_chat_message(self, message: Message):
         chat_id = message.chat.id
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
         content = await self._build_content(message)
-        if content is None:
-            return
-        conv_id = self.db.get_current_conv_id(chat_id)
-        self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
+        if content is not None:
+            conv_id = self.db.get_current_conv_id(chat_id)
+            self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
 
     #
     # Выбор модели
@@ -317,7 +321,7 @@ class LlmBot:
 
     @check_admin
     async def set_model(self, message: Message):
-        await message.reply("Выберите модель:", reply_markup=self.models_kb.as_markup())
+        await message.reply(self.localization.CHOOSE_MODEL, reply_markup=self.models_kb.as_markup())
 
     @check_admin
     async def set_model_button_handler(self, callback: CallbackQuery):
@@ -326,7 +330,7 @@ class LlmBot:
         assert model_name in self.clients
         self.db.set_current_model(chat_id, model_name)
         self.db.create_conv_id(chat_id)
-        await callback.message.edit_text(f"Новая модель задана:\n\n{model_name}")
+        await callback.message.edit_text(self.localization.NEW_MODEL.format(model_name=model_name))
 
     async def get_model(self, message: Message):
         chat_id = message.chat.id
@@ -338,21 +342,20 @@ class LlmBot:
     #
 
     @check_admin
-    async def set_system(self, message: Message):
+    async def set_system(self, message: Message, command: Command):
         chat_id = message.chat.id
-        text = message.text.replace("/setsystem", "").strip()
-        text = text.replace("@{}".format(self.bot_info.username), "").strip()
+        text = command.args
+        text = text if text else ""
         self.db.set_system_prompt(chat_id, text)
         self.db.create_conv_id(chat_id)
         text = self._truncate_text(text)
-        await message.reply(f"Новый системный промпт задан:\n\n{text}")
+        await message.reply(self.localization.NEW_SYSTEM_PROMPT.format(system_prompt=text))
 
     async def get_system(self, message: Message):
         chat_id = message.chat.id
         prompt = self.db.get_system_prompt(chat_id, self.default_prompts)
         if not prompt.strip():
-            await message.reply("Системный промпт пуст")
-            return
+            prompt = self.localization.EMPTY_SYSTEM_PROMPT
         await message.reply(prompt)
 
     async def reset_system(self, message: Message):
@@ -360,28 +363,30 @@ class LlmBot:
         model = self.db.get_current_model(chat_id)
         self.db.set_system_prompt(chat_id, self.default_prompts.get(model, ""))
         self.db.create_conv_id(chat_id)
-        await message.reply("Системный промпт сброшен!")
+        await message.reply(self.localization.RESET_SYSTEM_PROMPT)
 
     #
     # Именование модели
     #
 
     @check_admin
-    async def set_short_name(self, message: Message):
+    async def set_short_name(self, message: Message, command: Command):
         chat_id = message.chat.id
-        text = message.text.replace("/setshortname", "").strip()
-        text = text.replace("@{}".format(self.bot_info.username), "").strip()
-        if not text:
-            await message.reply("Короткое имя не может быть пустым. Напишите имя в одном сообщении с командой.")
-            return
-        self.db.set_short_name(chat_id, text)
-        self.db.create_conv_id(chat_id)
-        await message.reply(f"Новое короткое имя задано:\n\n{text}")
+        text = command.args
+        text = text if text else ""
+        text = text.strip()
+        message_text = self.localization.EMPTY_SHORT_NAME
+        if text:
+            self.db.set_short_name(chat_id, text)
+            self.db.create_conv_id(chat_id)
+            message_text = self.localization.NEW_SHORT_NAME.format(name=text)
+        await message.reply(message_text)
 
     async def get_short_name(self, message: Message):
         chat_id = message.chat.id
         name = self.db.get_short_name(chat_id)
-        await message.reply(f"Короткое имя бота: {name}")
+        text = self.localization.GET_SHORT_NAME.format(name=name)
+        await message.reply(text)
 
     #
     # Персонажи
@@ -389,7 +394,7 @@ class LlmBot:
 
     @check_admin
     async def set_character(self, message: Message):
-        await message.reply("Выберите персонажа:", reply_markup=self.characters_kb.as_markup())
+        await message.reply(self.localization.CHOOSE_CHARACTER, reply_markup=self.characters_kb.as_markup())
 
     @check_admin
     async def set_character_button_handler(self, callback: CallbackQuery):
@@ -398,19 +403,19 @@ class LlmBot:
         assert char_name in self.characters
         character = self.characters[char_name]
         system_prompt = character["system_prompt"]
-        self.db.set_system_prompt(chat_id, system_prompt)
         short_name = character["short_name"]
+        self.db.set_system_prompt(chat_id, system_prompt)
         self.db.set_short_name(chat_id, short_name)
         self.db.create_conv_id(chat_id)
         await callback.message.edit_text(
-            f"Новый персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{short_name}'"
+            self.localization.NEW_CHARACTER.format(system_prompt=system_prompt, name=short_name)
         )
 
     #
     # Лимиты
     #
 
-    def count_remaining_messages(self, user_id: int, model: str):
+    def _count_remaining_messages(self, user_id: int, model: str):
         is_subscribed = self.db.is_subscribed_user(user_id)
         mode = "standard" if not is_subscribed else "subscribed"
         limit = self.limits[model][mode]["limit"]
@@ -423,18 +428,19 @@ class LlmBot:
         user_id = message.from_user.id
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
-        remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
-        await message.reply("Осталось запросов к {}: {}".format(model, remaining_count))
+        remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
+        text = self.localization.REMAINING_MESSAGES.format(model=model, remaining_count=remaining_count)
+        await message.reply(text)
 
     async def sub_info(self, message: Message):
         user_id = message.from_user.id
         remaining_seconds = self.db.get_subscription_info(user_id)
-        text = "Подписка неактивна"
+        text = self.localization.INACTIVE_SUB
         if remaining_seconds > 0:
-            text = f"Подписка активирована! Осталось {remaining_seconds//3600}ч"
+            text = self.localization.ACTIVE_SUB.format(remaining_seconds=remaining_seconds)
         await message.reply(text)
 
-    def get_limits(self):
+    def _get_limits(self):
         template = "- *{model}*: {count} сообщений каждые {hours} часа"
         sub_limits = [
             template.format(
@@ -448,7 +454,7 @@ class LlmBot:
         user_id = message.from_user.id
         email = self.db.get_email(user_id)
         if not email:
-            await message.reply("Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек.")
+            await message.reply(self.localization.SET_EMAIL)
             return
 
         chat_id = message.chat.id
@@ -462,7 +468,7 @@ class LlmBot:
             await message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
             return
 
-        sub_limits = self.get_limits()
+        sub_limits = self._get_limits()
         description = SUB_DESCRIPTION.format(sub_limits=sub_limits, price=SUB_PRICE)
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
@@ -606,9 +612,7 @@ class LlmBot:
         if "image_url" not in function_response[1]:
             text = f"Ошибка при вызове DALL-E: {function_response}"
             new_message = await self.bot.send_message(
-                chat_id=chat_id,
-                reply_to_message_id=placeholder.message_id,
-                text=text
+                chat_id=chat_id, reply_to_message_id=placeholder.message_id, text=text
             )
             self.db.save_assistant_message(
                 content=text,
@@ -709,7 +713,7 @@ class LlmBot:
             await message.reply("Выбранная модель больше не поддерживается, переключите на другую с помощью /setmodel")
             return
 
-        remaining_count = self.count_remaining_messages(user_id=user_id, model=model)
+        remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         print(user_id, model, remaining_count)
         if remaining_count <= 0:
             await message.reply(
@@ -802,6 +806,7 @@ class LlmBot:
         chat_completion = await self.clients[model].chat.completions.create(
             model=self.model_names[model], messages=messages, **kwargs
         )
+        assert chat_completion.choices, str(chat_completion)
         assert chat_completion.choices[0].message.content, str(chat_completion)
         answer = chat_completion.choices[0].message.content
         print(
@@ -995,6 +1000,7 @@ def main(
     bot_token: str,
     client_config_path: str,
     db_path: str,
+    localization_config_path: str,
     chunk_size: int = 3500,
     characters_path: str = None,
     tools_config_path: str = None,
@@ -1008,6 +1014,7 @@ def main(
         characters_path=characters_path,
         tools_config_path=tools_config_path,
         yookassa_config_path=yookassa_config_path,
+        localization_config_path=localization_config_path,
     )
     asyncio.run(bot.start_polling())
 

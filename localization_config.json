@@ -1,0 +1,21 @@
+{
+    "ru": {
+        "RESET": "История сообщений сброшена!",
+        "NO_HISTORY": "Нет истории!",
+        "CHOOSE_MODEL": "Выберите модель:",
+        "NEW_MODEL": "Новая модель задана:\n\n{model_name}",
+        "NEW_SYSTEM_PROMPT": "Новый системный промпт задан:\n\n{system_prompt}",
+        "EMPTY_SYSTEM_PROMPT": "Системный промпт пуст",
+        "RESET_SYSTEM_PROMPT": "Системный промпт сброшен!",
+        "EMPTY_SHORT_NAME": "Короткое имя не может быть пустым. Напишите имя в одном сообщении с командой.",
+        "NEW_SHORT_NAME": "Новое короткое имя задано:\n\n{name}",
+        "GET_SHORT_NAME": "Короткое имя бота: {name}",
+        "CHOOSE_CHARACTER": "Выберите персонажа:",
+        "NEW_CHARACTER": "Новый персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{name}'",
+        "HISTORY": "{tokens_count} токенов: {history}",
+        "INACTIVE_SUB": "Подписка неактивна",
+        "ACTIVE_SUB": "Подписка активирована! Осталось {remaining_seconds//3600}ч",
+        "REMAINING_MESSAGES": "Осталось запросов к {model}: {remaining_count}",
+        "SET_EMAIL": "Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек."
+    }
+}

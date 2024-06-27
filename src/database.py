@@ -1,14 +1,13 @@
 import secrets
 import json
 import copy
-from typing import Optional
+from typing import Optional, List, Any, Dict
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, MetaData, func
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, Integer, String, Text, Boolean, MetaData, func
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, mapped_column, Mapped
 
 
-Base = declarative_base()
 metadata = MetaData()
 
 DEFAULT_SHORT_NAME = "Сайга"
@@ -20,84 +19,88 @@ DEFAULT_PARAMS = {
 }
 
 
-class Messages(Base):
+class Base(DeclarativeBase):
+    pass
+
+
+class Message(Base):
     __tablename__ = "messages"
-    id = Column(Integer, primary_key=True)
-    role = Column(String, nullable=False)
-    user_id = Column(Integer, nullable=True)
-    user_name = Column(String, nullable=True)
-    reply_user_id = Column(Integer, nullable=True)
-    content = Column(Text, nullable=True)
-    conv_id = Column(String, nullable=False, index=True)
-    timestamp = Column(Integer, nullable=False)
-    message_id = Column(Integer, nullable=True)
-    model = Column(String)
-    system_prompt = Column(Text, nullable=True)
-    tool_calls = Column(Text, nullable=True)
-    tool_call_id = Column(Text, nullable=True)
-    name = Column(Text, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role: Mapped[str]
+    user_id = Mapped[Optional[int]]
+    user_name: Mapped[Optional[str]]
+    reply_user_id: Mapped[Optional[int]]
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    conv_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    timestamp: Mapped[Optional[int]]
+    message_id = Mapped[Optional[int]]
+    model: Mapped[Optional[str]]
+    system_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tool_calls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tool_call_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
-class Conversations(Base):
+class Conversation(Base):
     __tablename__ = "current_conversations"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    conv_id = Column(String, nullable=False, unique=True)
-    timestamp = Column(Integer, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    conv_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    timestamp: Mapped[int]
 
 
-class Models(Base):
+class Model(Base):
     __tablename__ = "models"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, unique=True, index=True)
-    model = Column(String, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+    model: Mapped[str]
 
 
 class ModelParameters(Base):
     __tablename__ = "model_parameters"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    model = Column(String, nullable=True, index=True)
-    prompt = Column(Text, nullable=True)
-    short_name = Column(String, nullable=True)
-    generation_parameters = Column(Text, nullable=True)
-    enable_tools = Column(Boolean, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    model: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
+    prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    short_name: Mapped[Optional[str]]
+    generation_parameters: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    enable_tools: Mapped[Optional[bool]]
 
 
-class Likes(Base):
+class Like(Base):
     __tablename__ = "likes"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    message_id = Column(Integer, nullable=False, index=True)
-    feedback = Column(String, nullable=False)
-    is_correct = Column(Integer, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    feedback: Mapped[str]
+    is_correct: Mapped[int]
 
 
-class Subscriptions(Base):
+class Subscription(Base):
     __tablename__ = "subscriptions"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    from_timestamp = Column(Integer, nullable=False)
-    until_timestamp = Column(Integer, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    from_timestamp: Mapped[int]
+    until_timestamp: Mapped[int]
 
 
-class Payments(Base):
+class Payment(Base):
     __tablename__ = "Payments"
-    id = Column(Integer, primary_key=True)
-    timestamp = Column(Integer, nullable=False)
-    payment_id = Column(String, nullable=False, index=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    chat_id = Column(Integer, nullable=False)
-    status = Column(String, nullable=False)
-    internal_status = Column(String, nullable=False)
-    url = Column(String, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[int]
+    payment_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    chat_id: Mapped[int]
+    status: Mapped[str]
+    internal_status: Mapped[str]
+    url: Mapped[Optional[str]]
 
 
-class Emails(Base):
+class Email(Base):
     __tablename__ = "Emails"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    email = Column(String, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    email: Mapped[str]
 
 
 class Database:
@@ -107,25 +110,25 @@ class Database:
         self.Session = sessionmaker(bind=self.engine)
 
     @staticmethod
-    def get_current_ts():
+    def get_current_ts() -> int:
         return int(datetime.now().replace(tzinfo=timezone.utc).timestamp())
 
-    def set_email(self, user_id: int, email: str):
+    def set_email(self, user_id: int, email: str) -> None:
         with self.Session() as session:
-            obj = Emails(user_id=user_id, email=email)
+            obj = Email(user_id=user_id, email=email)
             session.add(obj)
             session.commit()
 
-    def get_email(self, user_id: int):
+    def get_email(self, user_id: int) -> Optional[str]:
         with self.Session() as session:
-            obj = session.query(Emails).filter(Emails.user_id == user_id).first()
+            obj = session.query(Email).filter(Email.user_id == user_id).first()
             if not obj:
                 return None
             return obj.email
 
-    def save_payment(self, payment_id: str, user_id: int, chat_id: int, status: str, url: str, timestamp: int):
+    def save_payment(self, payment_id: str, user_id: int, chat_id: int, status: str, url: str, timestamp: int) -> None:
         with self.Session() as session:
-            new_payment = Payments(
+            new_payment = Payment(
                 payment_id=payment_id,
                 user_id=user_id,
                 chat_id=chat_id,
@@ -137,43 +140,43 @@ class Database:
             session.add(new_payment)
             session.commit()
 
-    def get_waiting_payments(self):
+    def get_waiting_payments(self) -> List[Payment]:
         with self.Session() as session:
-            payments = session.query(Payments).filter(Payments.internal_status == "waiting").all()
+            payments = session.query(Payment).filter(Payment.internal_status == "waiting").all()
             return payments
 
-    def set_payment_status(self, payment_id: str, status: str, internal_status: str):
+    def set_payment_status(self, payment_id: str, status: str, internal_status: str) -> None:
         with self.Session() as session:
-            payment = session.query(Payments).filter(Payments.payment_id == payment_id).first()
+            payment = session.query(Payment).filter(Payment.payment_id == payment_id).first()
             if payment is None:
                 return
             payment.status = status
             payment.internal_status = internal_status
             session.commit()
 
-    def create_conv_id(self, user_id):
+    def create_conv_id(self, user_id: int) -> str:
         conv_id = secrets.token_hex(nbytes=16)
         with self.Session() as session:
-            new_conv = Conversations(user_id=user_id, conv_id=conv_id, timestamp=self.get_current_ts())
+            new_conv = Conversation(user_id=user_id, conv_id=conv_id, timestamp=self.get_current_ts())
             session.add(new_conv)
             session.commit()
         return conv_id
 
-    def get_current_conv_id(self, user_id):
+    def get_current_conv_id(self, user_id: int) -> str:
         with self.Session() as session:
             conv = (
-                session.query(Conversations)
-                .filter(Conversations.user_id == user_id)
-                .order_by(Conversations.timestamp.desc())
+                session.query(Conversation)
+                .filter(Conversation.user_id == user_id)
+                .order_by(Conversation.timestamp.desc())
                 .first()
             )
             if conv is None:
                 return self.create_conv_id(user_id)
             return conv.conv_id
 
-    def fetch_conversation(self, conv_id):
+    def fetch_conversation(self, conv_id: str) -> List[Any]:
         with self.Session() as session:
-            messages = session.query(Messages).filter(Messages.conv_id == conv_id).order_by(Messages.timestamp).all()
+            messages = session.query(Message).filter(Message.conv_id == conv_id).order_by(Message.timestamp).all()
             if not messages:
                 return []
             clean_messages = []
@@ -193,30 +196,30 @@ class Database:
                 clean_messages.append(message)
             return clean_messages
 
-    def get_user_id(self, user_name):
+    def get_user_id(self, user_name: str) -> int:
         with self.Session() as session:
-            user_ids = session.query(Messages.user_id).filter(Messages.user_name == user_name).distinct().all()
+            user_ids = session.query(Message.user_id).filter(Message.user_name == user_name).distinct().all()
             assert user_ids
-            return user_ids[0][0]
+            return int(user_ids[0][0])
 
-    def get_current_model(self, user_id):
+    def get_current_model(self, user_id: int) -> str:
         with self.Session() as session:
-            model = session.query(Models).filter(Models.user_id == user_id).first()
+            model = session.query(Model).filter(Model.user_id == user_id).first()
             if model:
                 return model.model
             return DEFAULT_MODEL
 
-    def set_current_model(self, user_id: int, model_name: str):
+    def set_current_model(self, user_id: int, model_name: str) -> None:
         with self.Session() as session:
-            model = session.query(Models).filter(Models.user_id == user_id).first()
+            model = session.query(Model).filter(Model.user_id == user_id).first()
             if model:
                 model.model = model_name
             else:
-                new_model = Models(user_id=user_id, model=model_name)
+                new_model = Model(user_id=user_id, model=model_name)
                 session.add(new_model)
             session.commit()
 
-    def get_current_model_parameters(self, user_id):
+    def get_current_model_parameters(self, user_id: int) -> Optional[ModelParameters]:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
             params = (
@@ -229,14 +232,14 @@ class Database:
                 return params
             return None
 
-    def get_system_prompt(self, user_id, default_prompts):
+    def get_system_prompt(self, user_id: int, default_prompts: Dict[str, str]) -> str:
         current_model = self.get_current_model(user_id)
         params = self.get_current_model_parameters(user_id)
-        if params and params.prompt:
+        if params and params.prompt is not None:
             return params.prompt
         return default_prompts.get(current_model, "")
 
-    def set_system_prompt(self, user_id: int, text: str):
+    def set_system_prompt(self, user_id: int, text: str) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
             params = (
@@ -252,13 +255,13 @@ class Database:
                 session.add(params)
             session.commit()
 
-    def get_short_name(self, user_id: int):
+    def get_short_name(self, user_id: int) -> str:
         params = self.get_current_model_parameters(user_id)
         if params and params.short_name:
             return params.short_name
         return DEFAULT_SHORT_NAME
 
-    def set_short_name(self, user_id: int, text: str):
+    def set_short_name(self, user_id: int, text: str) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
             params = (
@@ -274,7 +277,7 @@ class Database:
                 session.add(params)
             session.commit()
 
-    def set_parameters(self, user_id: int, default_params, **kwargs):
+    def set_parameters(self, user_id: int, default_params: Dict[str, Any], **kwargs: Dict[Any, Any]) -> None:
         current_model = self.get_current_model(user_id)
         generation_parameters = self.get_parameters(user_id, default_params)
         for key, value in kwargs.items():
@@ -293,20 +296,21 @@ class Database:
                 session.add(params)
             session.commit()
 
-    def get_parameters(self, user_id: int, default_params):
+    def get_parameters(self, user_id: int, default_params: Dict[str, Any]) -> Dict[str, Any]:
         current_model = self.get_current_model(user_id)
         params = self.get_current_model_parameters(user_id)
         if params and params.generation_parameters:
-            return json.loads(params.generation_parameters)
+            parsed_params: Dict[str, Any] = json.loads(params.generation_parameters)
+            return parsed_params
         return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
 
-    def are_tools_enabled(self, user_id: int):
+    def are_tools_enabled(self, user_id: int) -> bool:
         params = self.get_current_model_parameters(user_id)
         if params and params.enable_tools is not None:
             return params.enable_tools
-        return True
+        return False
 
-    def set_enable_tools(self, user_id: int, value: bool):
+    def set_enable_tools(self, user_id: int, value: bool) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
             params = (
@@ -322,9 +326,9 @@ class Database:
                 session.add(params)
             session.commit()
 
-    def save_user_message(self, content: str, conv_id: str, user_id: int, user_name: str = None):
+    def save_user_message(self, content: str, conv_id: str, user_id: int, user_name: Optional[str] = None) -> None:
         with self.Session() as session:
-            new_message = Messages(
+            new_message = Message(
                 role="user",
                 content=self._serialize_content(content),
                 conv_id=conv_id,
@@ -343,9 +347,9 @@ class Database:
         model: str,
         system_prompt: Optional[str] = None,
         reply_user_id: Optional[int] = None,
-    ):
+    ) -> None:
         with self.Session() as session:
-            new_message = Messages(
+            new_message = Message(
                 role="assistant",
                 content=self._serialize_content(content),
                 conv_id=conv_id,
@@ -365,9 +369,9 @@ class Database:
         model: str,
         tool_call_id: str,
         name: str,
-    ):
+    ) -> None:
         with self.Session() as session:
-            new_message = Messages(
+            new_message = Message(
                 role="tool",
                 content=self._serialize_content(content),
                 conv_id=conv_id,
@@ -381,12 +385,12 @@ class Database:
 
     def save_tool_calls_message(
         self,
-        tool_calls,
+        tool_calls: Any,
         conv_id: str,
         model: str,
-    ):
+    ) -> None:
         with self.Session() as session:
-            new_message = Messages(
+            new_message = Message(
                 role="assistant",
                 content=None,
                 conv_id=conv_id,
@@ -397,9 +401,9 @@ class Database:
             session.add(new_message)
             session.commit()
 
-    def save_feedback(self, feedback: str, user_id: int, message_id: int):
+    def save_feedback(self, feedback: str, user_id: int, message_id: int) -> None:
         with self.Session() as session:
-            new_feedback = Likes(
+            new_feedback = Like(
                 user_id=user_id,
                 message_id=message_id,
                 feedback=feedback,
@@ -408,55 +412,55 @@ class Database:
             session.add(new_feedback)
             session.commit()
 
-    def count_user_messages(self, user_id: int, model: str, interval: int):
+    def count_user_messages(self, user_id: int, model: str, interval: int) -> int:
         with self.Session() as session:
             current_ts = self.get_current_ts()
             count = (
-                session.query(func.count(Messages.id))
+                session.query(func.count(Message.id))
                 .filter(
-                    Messages.reply_user_id == user_id,
-                    Messages.role == "assistant",
-                    Messages.model == model,
-                    Messages.timestamp.isnot(None),
-                    Messages.timestamp > (current_ts - interval),
+                    Message.reply_user_id == user_id,
+                    Message.role == "assistant",
+                    Message.model == model,
+                    Message.timestamp.isnot(None),
+                    Message.timestamp > (current_ts - interval),
                 )
                 .scalar()
             )
-            return count
+            return int(count)
 
-    def count_generated_images(self, user_id: int, interval: int):
+    def count_generated_images(self, user_id: int, interval: int) -> int:
         with self.Session() as session:
             current_ts = self.get_current_ts()
             count = (
-                session.query(func.count(Messages.id))
+                session.query(func.count(Message.id))
                 .filter(
-                    Messages.reply_user_id == user_id,
-                    Messages.role == "assistant",
-                    Messages.model == "dalle",
-                    Messages.timestamp.isnot(None),
-                    Messages.timestamp > (current_ts - interval),
+                    Message.reply_user_id == user_id,
+                    Message.role == "assistant",
+                    Message.model == "dalle",
+                    Message.timestamp.isnot(None),
+                    Message.timestamp > (current_ts - interval),
                 )
                 .scalar()
             )
-            return count
+            return int(count)
 
-    def is_subscribed_user(self, user_id: int):
+    def is_subscribed_user(self, user_id: int) -> bool:
         remaining_time = self.get_subscription_info(user_id)
         return remaining_time > 0
 
-    def get_subscription_info(self, user_id: int):
+    def get_subscription_info(self, user_id: int) -> int:
         with self.Session() as session:
-            subscriptions = (session.query(Subscriptions).filter(Subscriptions.user_id == user_id)).all()
+            subscriptions = (session.query(Subscription).filter(Subscription.user_id == user_id)).all()
             if not subscriptions:
                 return 0
             until_timestamp = max(subscriptions, key=lambda x: x.until_timestamp).until_timestamp
             remaining_time = until_timestamp - self.get_current_ts()
             return max(remaining_time, 0)
 
-    def subscribe_user(self, user_id: int, duration: int):
+    def subscribe_user(self, user_id: int, duration: int) -> None:
         with self.Session() as session:
             current_ts = self.get_current_ts()
-            new_subscription = Subscriptions(
+            new_subscription = Subscription(
                 user_id=user_id,
                 from_timestamp=current_ts,
                 until_timestamp=current_ts + duration,
@@ -464,17 +468,17 @@ class Database:
             session.add(new_subscription)
             session.commit()
 
-    def get_all_conv_ids(self):
+    def get_all_conv_ids(self) -> List[str]:
         with self.Session() as session:
-            conversations = session.query(Conversations).all()
+            conversations = session.query(Conversation).all()
             return [conv.conv_id for conv in conversations]
 
-    def _serialize_content(self, content):
+    def _serialize_content(self, content: Any) -> str:
         if isinstance(content, str):
             return content
         return json.dumps(content)
 
-    def _parse_content(self, content):
+    def _parse_content(self, content: Any) -> Any:
         try:
             if content is None:
                 return None

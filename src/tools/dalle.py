@@ -22,6 +22,7 @@ class DalleTool(Tool):
                 "create a prompt that dalle can use to generate the image.\n"
                 "The prompt sent to dalle should be very detailed, and around 50 words long.\n"
                 "Only call this tool if the user explicitly asked to draw the image the last message.\n"
+                "Do not call it when you asked to analyze the image.\n"
                 "If you see <image_placeholder>, it means the image was already generated.",
                 "parameters": {
                     "type": "object",
