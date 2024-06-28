@@ -115,13 +115,16 @@ class Database:
 
     def set_email(self, user_id: int, email: str) -> None:
         with self.Session() as session:
-            obj = Email(user_id=user_id, email=email)
-            session.add(obj)
+            obj = session.query(Email).filter(Email.user_id == user_id).first()
+            if obj:
+                obj.email = email
+            else:
+                session.add(Email(user_id=user_id, email=email))
             session.commit()
 
     def get_email(self, user_id: int) -> Optional[str]:
         with self.Session() as session:
-            obj = session.query(Email).filter(Email.user_id == user_id).one_or_none()
+            obj = session.query(Email).filter(Email.user_id == user_id).first()
             return obj.email if obj else None
 
     def save_payment(self, payment_id: str, user_id: int, chat_id: int, status: str, url: str, timestamp: int) -> None:
@@ -144,7 +147,7 @@ class Database:
 
     def set_payment_status(self, payment_id: str, status: str, internal_status: str) -> None:
         with self.Session() as session:
-            payment = session.query(Payment).filter(Payment.payment_id == payment_id).one_or_none()
+            payment = session.query(Payment).filter(Payment.payment_id == payment_id).first()
             if payment:
                 payment.status = status
                 payment.internal_status = internal_status
@@ -198,12 +201,12 @@ class Database:
 
     def get_current_model(self, user_id: int) -> str:
         with self.Session() as session:
-            model = session.query(Model).filter(Model.user_id == user_id).one_or_none()
+            model = session.query(Model).filter(Model.user_id == user_id).first()
             return model.model if model else DEFAULT_MODEL
 
     def set_current_model(self, user_id: int, model_name: str) -> None:
         with self.Session() as session:
-            model = session.query(Model).filter(Model.user_id == user_id).one_or_none()
+            model = session.query(Model).filter(Model.user_id == user_id).first()
             if model:
                 model.model = model_name
             else:
@@ -213,7 +216,7 @@ class Database:
     def get_current_model_parameters(self, user_id: int) -> Optional[ModelParameters]:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            return session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
+            return session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).first()
 
     def get_system_prompt(self, user_id: int, default_prompts: Dict[str, str]) -> str:
         current_model = self.get_current_model(user_id)
@@ -225,7 +228,7 @@ class Database:
     def set_system_prompt(self, user_id: int, text: str) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).first()
             if params:
                 params.prompt = text
             else:
@@ -239,7 +242,7 @@ class Database:
     def set_short_name(self, user_id: int, text: str) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).first()
             if params:
                 params.short_name = text
             else:
@@ -251,7 +254,7 @@ class Database:
         generation_parameters = self.get_parameters(user_id, default_params)
         generation_parameters.update(kwargs)
         with self.Session() as session:
-            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).first()
             if params:
                 params.generation_parameters = json.dumps(generation_parameters)
             else:
@@ -263,7 +266,7 @@ class Database:
     def get_parameters(self, user_id: int, default_params: Dict[str, Any]) -> Dict[str, Any]:
         current_model = self.get_current_model(user_id)
         params = self.get_current_model_parameters(user_id)
-        if params and params.generation_parameters:
+        if params and params.generation_parameters and params.generation_parameters != "null":
             parsed_params: Dict[str, Any] = json.loads(params.generation_parameters)
             return parsed_params
         return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
@@ -275,7 +278,7 @@ class Database:
     def set_enable_tools(self, user_id: int, value: bool) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).first()
             if params:
                 params.enable_tools = value
             else:

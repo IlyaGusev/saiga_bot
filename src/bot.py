@@ -773,6 +773,7 @@ class LlmBot:
             return
 
         params = self.db.get_parameters(chat_id, self.default_params)
+        assert params
         if "claude" in model and params["temperature"] > 1.0:
             await message.reply("Claude не поддерживает температуру выше 1, задайте новую с помощью /settemperature")
             return
