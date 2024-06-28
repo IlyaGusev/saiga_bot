@@ -2,8 +2,9 @@ import json
 import asyncio
 import uuid
 from enum import Enum
+from typing import Any
 
-from yookassa import Configuration, Payment
+from yookassa import Configuration, Payment  # type: ignore
 
 
 class YookassaStatus(str, Enum):
@@ -18,7 +19,7 @@ class YookassaHandler:
         Configuration.account_id = account_id
         Configuration.secret_key = secret_key
 
-    def create_payment(self, value: int, description: str, email: str, bot_username: str):
+    def create_payment(self, value: int, description: str, email: str, bot_username: str) -> Any:
         payment = Payment.create(
             {
                 "amount": {"value": value, "currency": "RUB"},

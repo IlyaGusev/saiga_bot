@@ -8,20 +8,22 @@ import base64
 import textwrap
 from functools import wraps
 from email.utils import parseaddr
-from typing import List, Dict, Any, Optional
+from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine
 
 import requests
-import fire
+import fire  # type: ignore
 import tiktoken
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, InlineKeyboardButton, CallbackQuery, BufferedInputFile
+from aiogram.types import Message, InlineKeyboardButton, CallbackQuery, BufferedInputFile, User
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
-from transformers import AutoTokenizer
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
+from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
+from transformers import AutoTokenizer  # type: ignore
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
 from src.localization import Localization
 from src.tools import Tool
@@ -102,25 +104,30 @@ class Tokenizer:
     tokenizers: Dict[str, AutoTokenizer] = dict()
 
     @classmethod
-    def get(cls, model_name: str):
+    def get(cls, model_name: str) -> AutoTokenizer:
         if model_name not in cls.tokenizers:
             cls.tokenizers[model_name] = AutoTokenizer.from_pretrained(model_name)
         return cls.tokenizers[model_name]
 
 
-def check_admin(func):
+def check_admin(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Coroutine[Any, Any, Any]]:
     @wraps(func)
-    async def wrapped(self, obj, *args, **kwargs):
+    async def wrapped(self: Any, obj: Union[CallbackQuery, Message], *args: Any, **kwargs: Any) -> Any:
         if isinstance(obj, CallbackQuery):
+            assert obj.message
+            assert obj.from_user
             chat_id = obj.message.chat.id
             user_id = obj.from_user.id
             user = obj.from_user
         elif isinstance(obj, Message):
+            assert obj.chat
+            assert obj.from_user
             chat_id = obj.chat.id
             user_id = obj.from_user.id
             user = obj.from_user
         else:
-            return await func(self, obj, *args, **kwargs)
+            assert False
+        assert user
 
         if chat_id != user_id:
             user_name = self._get_user_name(user)
@@ -178,7 +185,7 @@ class LlmBot:
         self.localization = Localization.load(localization_config_path, "ru")
 
         # Инструменты
-        self.tools = dict()
+        self.tools: Dict[str, Tool] = dict()
         if tools_config_path:
             assert os.path.exists(tools_config_path)
             with open(tools_config_path) as r:
@@ -225,7 +232,7 @@ class LlmBot:
 
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
-        self.bot_info = None
+        self.bot_info: Optional[User] = None
         self.dp = Dispatcher()
         self.dp.message.register(self.start, Command("start"))
         self.dp.message.register(self.start, Command("help"))
@@ -257,8 +264,8 @@ class LlmBot:
         self.dp.callback_query.register(self.yookassa_sub_buy_proceed, F.data.startswith("buy:yookassa"))
 
         # Платежи
-        self.scheduler = None
-        self.yookassa = None
+        self.scheduler: Optional[AsyncIOScheduler] = None
+        self.yookassa: Optional[YookassaHandler] = None
         if yookassa_config_path and os.path.exists(yookassa_config_path):
             self.buy_kb.add(InlineKeyboardButton(text="Купить (из России)", callback_data="buy:yookassa"))
             with open(yookassa_config_path) as r:
@@ -327,11 +334,11 @@ class LlmBot:
     #
 
     @check_admin
-    async def set_model(self, message: Message):
+    async def set_model(self, message: Message) -> None:
         await message.reply(self.localization.CHOOSE_MODEL, reply_markup=self.models_kb.as_markup())
 
     @check_admin
-    async def set_model_button_handler(self, callback: CallbackQuery):
+    async def set_model_button_handler(self, callback: CallbackQuery) -> None:
         assert callback.message
         assert callback.data
         chat_id = callback.message.chat.id
@@ -339,9 +346,10 @@ class LlmBot:
         assert model_name in self.clients
         self.db.set_current_model(chat_id, model_name)
         self.db.create_conv_id(chat_id)
+        assert isinstance(callback.message, Message)
         await callback.message.edit_text(self.localization.NEW_MODEL.format(model_name=model_name))
 
-    async def get_model(self, message: Message):
+    async def get_model(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
         await message.reply(model)
@@ -379,7 +387,7 @@ class LlmBot:
     #
 
     @check_admin
-    async def set_short_name(self, message: Message, command: CommandObject):
+    async def set_short_name(self, message: Message, command: CommandObject) -> None:
         chat_id = message.chat.id
         text = command.args
         text = text if text else ""
@@ -391,7 +399,7 @@ class LlmBot:
             message_text = self.localization.NEW_SHORT_NAME.format(name=text)
         await message.reply(message_text)
 
-    async def get_short_name(self, message: Message):
+    async def get_short_name(self, message: Message) -> None:
         chat_id = message.chat.id
         name = self.db.get_short_name(chat_id)
         text = self.localization.GET_SHORT_NAME.format(name=name)
@@ -402,11 +410,11 @@ class LlmBot:
     #
 
     @check_admin
-    async def set_character(self, message: Message):
+    async def set_character(self, message: Message) -> None:
         await message.reply(self.localization.CHOOSE_CHARACTER, reply_markup=self.characters_kb.as_markup())
 
     @check_admin
-    async def set_character_button_handler(self, callback: CallbackQuery):
+    async def set_character_button_handler(self, callback: CallbackQuery) -> None:
         assert callback.message
         assert callback.data
         chat_id = callback.message.chat.id
@@ -418,6 +426,7 @@ class LlmBot:
         self.db.set_system_prompt(chat_id, system_prompt)
         self.db.set_short_name(chat_id, short_name)
         self.db.create_conv_id(chat_id)
+        assert isinstance(callback.message, Message)
         await callback.message.edit_text(
             self.localization.NEW_CHARACTER.format(system_prompt=system_prompt, name=short_name)
         )
@@ -429,9 +438,9 @@ class LlmBot:
     def _count_remaining_messages(self, user_id: int, model: str) -> int:
         is_subscribed = self.db.is_subscribed_user(user_id)
         mode = "standard" if not is_subscribed else "subscribed"
-        limit = self.limits[model][mode]["limit"]
+        limit = int(self.limits[model][mode]["limit"])
         interval = self.limits[model][mode]["interval"]
-        count = self.db.count_user_messages(user_id, model, interval)
+        count = int(self.db.count_user_messages(user_id, model, interval))
         remaining_count = limit - count
         return max(0, remaining_count)
 
@@ -453,7 +462,7 @@ class LlmBot:
             text = self.localization.ACTIVE_SUB.format(remaining_seconds=remaining_seconds)
         await message.reply(text)
 
-    def _get_limits(self):
+    def _get_limits(self) -> str:
         template = "- *{model}*: {count} сообщений каждые {hours} часа"
         sub_limits = [
             template.format(
@@ -463,7 +472,7 @@ class LlmBot:
         ]
         return "\n".join(sub_limits)
 
-    async def sub_buy(self, message: Message):
+    async def sub_buy(self, message: Message) -> None:
         assert message.from_user
         user_id = message.from_user.id
         email = self.db.get_email(user_id)
@@ -486,10 +495,11 @@ class LlmBot:
         description = SUB_DESCRIPTION.format(sub_limits=sub_limits, price=SUB_PRICE)
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
-    async def yookassa_sub_buy_proceed(self, callback: CallbackQuery):
+    async def yookassa_sub_buy_proceed(self, callback: CallbackQuery) -> None:
         assert self.yookassa
         assert callback.from_user
         assert callback.message
+        assert isinstance(callback.message, Message)
         user_id = callback.from_user.id
         email = self.db.get_email(user_id)
         if not email:
@@ -510,6 +520,7 @@ class LlmBot:
         timestamp = self.db.get_current_ts()
         title = SUB_TITLE.format(user_id=user_id)
         assert self.bot_info
+        assert self.bot_info.username
         payment_data = self.yookassa.create_payment(SUB_PRICE, title, email=email, bot_username=self.bot_info.username)
         payment_id = payment_data["id"]
         try:
@@ -520,7 +531,7 @@ class LlmBot:
             )
             await callback.message.reply(f"Ссылка для оплаты: {url}")
         except Exception:
-            self.yookassa.yookassa.cancel_payment(payment_id)
+            self.yookassa.cancel_payment(payment_id)
 
     async def yookassa_check_payments(self) -> None:
         assert self.yookassa
@@ -567,6 +578,7 @@ class LlmBot:
         chat_id = callback.message.chat.id
         temperature = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, temperature=temperature)
+        assert isinstance(callback.message, Message)
         await callback.message.edit_text(f"Новая температура задана:\n\n{temperature}")
 
     @check_admin
@@ -574,15 +586,16 @@ class LlmBot:
         await message.reply("Выберите top-p:", reply_markup=self.top_p_kb.as_markup())
 
     @check_admin
-    async def set_top_p_button_handler(self, callback: CallbackQuery):
+    async def set_top_p_button_handler(self, callback: CallbackQuery) -> None:
         assert callback.message
         assert callback.data
         chat_id = callback.message.chat.id
         top_p = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, top_p=top_p)
+        assert isinstance(callback.message, Message)
         await callback.message.edit_text(f"Новое top-p задано:\n\n{top_p}")
 
-    async def get_params(self, message: Message):
+    async def get_params(self, message: Message) -> None:
         chat_id = message.chat.id
         params = self.db.get_parameters(chat_id, self.default_params)
         await message.reply(f"Текущие параметры генерации: {json.dumps(params)}")
@@ -610,18 +623,24 @@ class LlmBot:
         else:
             await message.reply("Инструменты выключены! Чтобы включить их назад, снова наберите /tools")
 
-    async def _check_tools(self, messages, model: str):
+    async def _check_tools(self, messages: ChatMessages, model: str) -> Any:
         messages = copy.deepcopy(messages)
         messages = self._replace_images(messages)
         messages = self._fix_broken_tool_calls(messages)
         tools = [t.get_specification() for t in self.tools.values()]
+        casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
+        casted_tools = [cast(ChatCompletionToolParam, tool) for tool in tools]
         chat_completion = await self.clients[model].chat.completions.create(
-            model=self.model_names[model], messages=messages, tools=tools, tool_choice="auto", max_tokens=2048
+            model=self.model_names[model],
+            messages=casted_messages,
+            tools=casted_tools,
+            tool_choice="auto",
+            max_tokens=2048,
         )
         response_message = chat_completion.choices[0].message
         return response_message
 
-    async def _call_dalle(self, conv_id: str, user_id: int, chat_id: int, placeholder: Message, **kwargs):
+    async def _call_dalle(self, conv_id: str, user_id: int, chat_id: int, placeholder: Message, **kwargs: Any) -> None:
         dalle_count = self.db.count_generated_images(user_id, 86400)
         is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
         if not is_dalle_remaining:
@@ -630,7 +649,7 @@ class LlmBot:
 
         await placeholder.edit_text(f"Генерирую картинку по промпту: {kwargs['prompt_russian']}")
         function_response = await self.tools["dalle"](**kwargs)
-        if "image_url" not in function_response[1]:
+        if not isinstance(function_response, list) or "image_url" not in function_response[1]:
             text = f"Ошибка при вызове DALL-E: {function_response}"
             new_message = await self.bot.send_message(
                 chat_id=chat_id, reply_to_message_id=placeholder.message_id, text=text
@@ -643,7 +662,8 @@ class LlmBot:
                 reply_user_id=user_id,
             )
             return
-        base64_image = function_response[1]["image_url"]["url"].replace("data:image/jpeg;base64,", "")
+        image_url: Any = function_response[1]["image_url"]
+        base64_image = image_url["url"].replace("data:image/jpeg;base64,", "")
         image_data = base64.b64decode(base64_image)
         input_file = BufferedInputFile(image_data, filename="image.jpeg")
         new_message = await self.bot.send_photo(
@@ -657,7 +677,9 @@ class LlmBot:
             reply_user_id=user_id,
         )
 
-    async def _call_tools(self, history, model: str, conv_id: str, user_id: int, chat_id: int, placeholder: Message):
+    async def _call_tools(
+        self, history: ChatMessages, model: str, conv_id: str, user_id: int, chat_id: int, placeholder: Message
+    ) -> Optional[ChatMessages]:
         response_message = await self._check_tools(history, model=model)
         tool_calls = response_message.tool_calls
         if not tool_calls:
@@ -673,7 +695,7 @@ class LlmBot:
             function_to_call = self.tools[function_name]
             print(function_name, "call", tool_call.function.arguments)
 
-            function_response = None
+            function_response: Union[str, List[Dict[str, Any]], None] = None
             try:
                 function_args = json.loads(tool_call.function.arguments)
             except json.decoder.JSONDecodeError:
@@ -692,6 +714,7 @@ class LlmBot:
                 except Exception as e:
                     function_response = f"Ошибка при вызове инструмента: {str(e)}"
 
+            assert function_response
             history.append(
                 {
                     "tool_call_id": tool_call.id,
@@ -713,7 +736,7 @@ class LlmBot:
     # Генерация
     #
 
-    async def generate(self, message: Message):
+    async def generate(self, message: Message) -> None:
         assert message.from_user
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
@@ -723,8 +746,13 @@ class LlmBot:
             chat_id = message.chat.id
             is_chat = True
             assert self.bot_info
-            is_reply = message.reply_to_message and message.reply_to_message.from_user.id == self.bot_info.id
+            is_reply = (
+                message.reply_to_message
+                and message.reply_to_message.from_user
+                and message.reply_to_message.from_user.id == self.bot_info.id
+            )
             bot_short_name = self.db.get_short_name(chat_id)
+            assert self.bot_info.username
             bot_names = ["@" + self.bot_info.username, bot_short_name]
             is_explicit = message.text and any(bot_name in message.text for bot_name in bot_names)
             if not is_reply and not is_explicit:
@@ -771,7 +799,7 @@ class LlmBot:
         try:
             tools = self._get_tools(chat_id)
             if tools:
-                history = await self._call_tools(
+                response = await self._call_tools(
                     history=history,
                     model=model,
                     user_id=user_id,
@@ -779,8 +807,9 @@ class LlmBot:
                     chat_id=chat_id,
                     placeholder=placeholder,
                 )
-                if history is None:
+                if response is None:
                     return
+                history = response
 
             history = self._fix_image_roles(history)
             history = self._fix_broken_tool_calls(history)
@@ -795,14 +824,17 @@ class LlmBot:
                 answer_parts = [answer]
 
             new_message = await placeholder.edit_text(answer_parts[0])
+            assert isinstance(new_message, Message)
             for part in answer_parts[1:]:
                 new_message = await message.reply(part)
+                assert isinstance(new_message, Message)
 
             markup = self.likes_kb.as_markup()
             new_message = await new_message.edit_text(
                 answer_parts[-1],
                 reply_markup=markup,
             )
+            assert isinstance(new_message, Message)
             self.db.save_assistant_message(
                 content=answer,
                 conv_id=conv_id,
@@ -818,7 +850,7 @@ class LlmBot:
             text += f" Попробуйте сделать /reset и пришлите @{CONTACT_USERNAME} вот это число: {chat_id}"
             await placeholder.edit_text(text)
 
-    async def _query_api(self, model, messages, system_prompt: str, **kwargs):
+    async def _query_api(self, model: str, messages: ChatMessages, system_prompt: str, **kwargs: Any) -> str:
         assert messages
         if messages[0]["role"] != "system" and system_prompt.strip():
             messages.insert(0, {"role": "system", "content": system_prompt})
@@ -830,12 +862,14 @@ class LlmBot:
             "####",
             self._crop_content(messages[-1]["content"]),
         )
+        casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
         chat_completion = await self.clients[model].chat.completions.create(
-            model=self.model_names[model], messages=messages, **kwargs
+            model=self.model_names[model], messages=casted_messages, **kwargs
         )
         assert chat_completion.choices, str(chat_completion)
         assert chat_completion.choices[0].message.content, str(chat_completion)
-        answer = chat_completion.choices[0].message.content
+        assert isinstance(chat_completion.choices[0].message.content, str), str(chat_completion)
+        answer: str = chat_completion.choices[0].message.content
         print(
             model,
             "####",
@@ -847,13 +881,15 @@ class LlmBot:
         )
         return answer
 
-    async def _build_content(self, message: Message):
+    async def _build_content(self, message: Message) -> Union[None, str, List[Dict[str, Any]]]:
         content_type = message.content_type
         if content_type == "text":
+            assert message.text
             text = message.text
             chat_id = message.chat.id
             bot_short_name = self.db.get_short_name(chat_id)
             assert self.bot_info
+            assert self.bot_info.username
             text = text.replace("@" + self.bot_info.username, bot_short_name).strip()
             return text
 
@@ -878,7 +914,7 @@ class LlmBot:
             file_stream.seek(0)
             base64_image = base64.b64encode(file_stream.read()).decode("utf-8")
             assert base64_image
-            content: ChatMessages = []
+            content: List[Dict[str, Any]] = []
             if message.caption:
                 content.append({"type": "text", "text": message.caption})
             content.append(
@@ -895,7 +931,7 @@ class LlmBot:
     # Служебные методы
     #
 
-    async def save_feedback(self, callback: CallbackQuery):
+    async def save_feedback(self, callback: CallbackQuery) -> None:
         assert callback.from_user
         assert callback.message
         assert callback.data
@@ -940,7 +976,7 @@ class LlmBot:
 
     @staticmethod
     def _merge_messages(messages: ChatMessages) -> ChatMessages:
-        new_messages = []
+        new_messages: ChatMessages = []
         prev_role = None
         for m in messages:
             content = m["content"]
@@ -968,7 +1004,7 @@ class LlmBot:
 
     @staticmethod
     def _fix_broken_tool_calls(messages: ChatMessages) -> ChatMessages:
-        clean_messages = []
+        clean_messages: ChatMessages = []
         is_expecting_tool_answer = False
         for m in messages:
             if is_expecting_tool_answer and "tool_call_id" not in m:
@@ -979,7 +1015,7 @@ class LlmBot:
             clean_messages = clean_messages[:-1]
         return clean_messages
 
-    def _prepare_history(self, history: ChatMessages, model: str, is_chat: bool = False):
+    def _prepare_history(self, history: ChatMessages, model: str, is_chat: bool = False) -> ChatMessages:
         if is_chat:
             history = self._format_chat(history)
         assert history
@@ -1000,8 +1036,8 @@ class LlmBot:
         assert history
         return history
 
-    def _get_user_name(self, user) -> str:
-        return user.full_name if user.full_name else user.username
+    def _get_user_name(self, user: User) -> str:
+        return str(user.full_name) if user.full_name else str(user.username)
 
     def _crop_content(self, content: str) -> str:
         if isinstance(content, str):

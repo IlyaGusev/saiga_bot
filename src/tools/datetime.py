@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Dict
+from typing import Dict, Optional, Any
 from datetime import datetime
 
 import aiohttp
@@ -10,12 +10,12 @@ from src.tools.base import Tool
 
 @Tool.register("datetime")
 class DateTimeTool(Tool):
-    def __init__(self, default_timezone: str = None):
+    def __init__(self, default_timezone: Optional[str] = None):
         self.default_timezone = default_timezone
         if default_timezone is None:
             self.default_timezone = "Europe/Moscow"
 
-    def get_specification(self):
+    def get_specification(self) -> Dict[str, Any]:
         return {
             "type": "function",
             "function": {
@@ -35,7 +35,7 @@ class DateTimeTool(Tool):
             },
         }
 
-    async def __call__(self, timezone: str) -> Dict:
+    async def __call__(self, timezone: str) -> str:
         url = f"https://worldtimeapi.org/api/timezone/{timezone}"
 
         try:

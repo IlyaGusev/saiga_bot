@@ -1,5 +1,6 @@
 import json
 import aiohttp
+from typing import Dict, Any
 
 from src.tools.base import Tool
 
@@ -27,7 +28,7 @@ class TerrariumTool(Tool):
                     )
                 return await resp.text()
 
-    def get_specification(self):
+    def get_specification(self) -> Dict[str, Any]:
         return {
             "type": "function",
             "function": {

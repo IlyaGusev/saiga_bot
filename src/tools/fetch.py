@@ -1,4 +1,6 @@
-from trafilatura import fetch_url, extract
+from typing import Dict, Any
+
+from trafilatura import fetch_url, extract  # type: ignore
 
 from src.tools.base import Tool
 
@@ -13,9 +15,10 @@ class FetchTool(Tool):
         result = extract(downloaded)
         if result is None:
             return f"Failed to fetch content from url: {url}"
-        return result[: self.max_chars]
+        text: str = result[: self.max_chars]
+        return text
 
-    def get_specification(self):
+    def get_specification(self) -> Dict[str, Any]:
         return {
             "type": "function",
             "function": {

@@ -13,8 +13,7 @@ class Registrable:
         def add_subclass_to_registry(subclass: Type[Any]) -> Type[Any]:
             if name in registry:
                 message = (
-                    f"Cannot register {name} as {cls.__name__}; "
-                    f"name already in use for {registry[name].__name__}"
+                    f"Cannot register {name} as {cls.__name__}; " f"name already in use for {registry[name].__name__}"
                 )
                 raise RuntimeError(message)
             registry[name] = subclass
@@ -23,7 +22,7 @@ class Registrable:
         return add_subclass_to_registry
 
     @classmethod
-    def by_name(cls, name: str) -> Type["Registrable"]:
+    def by_name(cls, name: str) -> Type[Any]:
         result = Registrable._registry[cls].get(name)
         if result is None:
             raise RuntimeError(f"{name} is not a registered name for {cls.__name__}.")

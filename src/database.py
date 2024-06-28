@@ -1,7 +1,7 @@
 import secrets
 import json
 import copy
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Union
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, Integer, String, Text, Boolean, MetaData, func
@@ -282,7 +282,13 @@ class Database:
                 session.add(ModelParameters(user_id=user_id, model=current_model, enable_tools=value))
             session.commit()
 
-    def save_user_message(self, content: str, conv_id: str, user_id: int, user_name: Optional[str] = None) -> None:
+    def save_user_message(
+        self,
+        content: Union[None, str, List[Dict[str, Any]]],
+        conv_id: str,
+        user_id: int,
+        user_name: Optional[str] = None,
+    ) -> None:
         with self.Session() as session:
             new_message = Message(
                 role="user",
@@ -297,7 +303,7 @@ class Database:
 
     def save_assistant_message(
         self,
-        content: str,
+        content: Union[str, List[Dict[str, Any]]],
         conv_id: str,
         message_id: int,
         model: str,
@@ -320,7 +326,7 @@ class Database:
 
     def save_tool_answer_message(
         self,
-        content: str,
+        content: Union[str, List[Dict[str, Any]]],
         conv_id: str,
         model: str,
         tool_call_id: str,
@@ -429,7 +435,7 @@ class Database:
             conversations = session.query(Conversation).all()
             return [conv.conv_id for conv in conversations]
 
-    def _serialize_content(self, content: Any) -> str:
+    def _serialize_content(self, content: Union[None, str, List[Dict[str, Any]]]) -> str:
         if isinstance(content, str):
             return content
         return json.dumps(content)

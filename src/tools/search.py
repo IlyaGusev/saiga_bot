@@ -1,4 +1,5 @@
 import traceback
+from typing import Optional, Dict, Any
 
 from duckduckgo_search import AsyncDDGS
 
@@ -7,7 +8,7 @@ from src.tools.base import Tool
 
 @Tool.register("search")
 class SearchTool(Tool):
-    def __init__(self, proxy: str = None):
+    def __init__(self, proxy: Optional[str] = None):
         self.proxy = proxy
 
     async def __call__(self, query: str) -> str:
@@ -21,7 +22,7 @@ class SearchTool(Tool):
             context = ""
         return context
 
-    def get_specification(self):
+    def get_specification(self) -> Dict[str, Any]:
         return {
             "type": "function",
             "function": {

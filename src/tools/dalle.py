@@ -1,6 +1,6 @@
 import base64
 import json
-from typing import List, Any
+from typing import List, Any, Dict, Union
 
 import requests
 from openai import AsyncOpenAI, BadRequestError
@@ -10,10 +10,10 @@ from src.tools.base import Tool
 
 @Tool.register("dalle")
 class DalleTool(Tool):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any):
         self.client = AsyncOpenAI(**kwargs)
 
-    def get_specification(self):
+    def get_specification(self) -> Dict[str, Any]:
         return {
             "type": "function",
             "function": {
@@ -41,7 +41,7 @@ class DalleTool(Tool):
             },
         }
 
-    async def __call__(self, prompt: str, prompt_russian: str) -> str:
+    async def __call__(self, prompt: str, prompt_russian: str) -> Union[str, List[Dict[str, Any]]]:
         try:
             response = await self.client.images.generate(
                 model="dall-e-3",
@@ -53,8 +53,9 @@ class DalleTool(Tool):
         except BadRequestError as e:
             return json.dumps(e.response.json()["error"]["message"])
         image_url = response.data[0].url
+        assert image_url
         encoded_image = self.encode_image(image_url)
-        content = [
+        content: List[Dict[str, Any]] = [
             {"type": "text", "text": prompt_russian},
             {
                 "type": "image_url",
@@ -63,7 +64,7 @@ class DalleTool(Tool):
         ]
         return content
 
-    def encode_image(self, image_url: str):
+    def encode_image(self, image_url: str) -> str:
         response = requests.get(image_url)
         response.raise_for_status()
         image_data = response.content
