@@ -1,5 +1,5 @@
 # Based on https://github.com/allenai/allennlp/blob/master/allennlp/common/registrable.py
-from typing import Callable, Dict, Type, TypeVar, ClassVar, Generic, Any
+from typing import Callable, Dict, Type, ClassVar, Any
 from collections import defaultdict
 
 

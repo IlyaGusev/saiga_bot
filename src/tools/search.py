@@ -1,7 +1,7 @@
 import traceback
 from typing import Optional, Dict, Any
 
-from duckduckgo_search import AsyncDDGS
+from duckduckgo_search import AsyncDDGS # type: ignore
 
 from src.tools.base import Tool
 

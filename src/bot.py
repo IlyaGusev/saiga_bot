@@ -1,16 +1,13 @@
 import asyncio
-import io
 import os
 import json
 import copy
 import traceback
 import base64
-import textwrap
 from functools import wraps
 from email.utils import parseaddr
 from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine
 
-import requests
 import fire  # type: ignore
 import tiktoken
 from aiogram import Bot, Dispatcher, F

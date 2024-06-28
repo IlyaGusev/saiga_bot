@@ -4,7 +4,7 @@ import copy
 from typing import Optional, List, Any, Dict, Union
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, Integer, String, Text, Boolean, MetaData, func
+from sqlalchemy import create_engine, Integer, String, Text, MetaData, func
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, mapped_column, Mapped
 
 
