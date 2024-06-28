@@ -121,10 +121,8 @@ class Database:
 
     def get_email(self, user_id: int) -> Optional[str]:
         with self.Session() as session:
-            obj = session.query(Email).filter(Email.user_id == user_id).first()
-            if not obj:
-                return None
-            return obj.email
+            obj = session.query(Email).filter(Email.user_id == user_id).one_or_none()
+            return obj.email if obj else None
 
     def save_payment(self, payment_id: str, user_id: int, chat_id: int, status: str, url: str, timestamp: int) -> None:
         with self.Session() as session:
@@ -142,17 +140,15 @@ class Database:
 
     def get_waiting_payments(self) -> List[Payment]:
         with self.Session() as session:
-            payments = session.query(Payment).filter(Payment.internal_status == "waiting").all()
-            return payments
+            return session.query(Payment).filter(Payment.internal_status == "waiting").all()
 
     def set_payment_status(self, payment_id: str, status: str, internal_status: str) -> None:
         with self.Session() as session:
-            payment = session.query(Payment).filter(Payment.payment_id == payment_id).first()
-            if payment is None:
-                return
-            payment.status = status
-            payment.internal_status = internal_status
-            session.commit()
+            payment = session.query(Payment).filter(Payment.payment_id == payment_id).one_or_none()
+            if payment:
+                payment.status = status
+                payment.internal_status = internal_status
+                session.commit()
 
     def create_conv_id(self, user_id: int) -> str:
         conv_id = secrets.token_hex(nbytes=16)
@@ -170,9 +166,7 @@ class Database:
                 .order_by(Conversation.timestamp.desc())
                 .first()
             )
-            if conv is None:
-                return self.create_conv_id(user_id)
-            return conv.conv_id
+            return conv.conv_id if conv else self.create_conv_id(user_id)
 
     def fetch_conversation(self, conv_id: str) -> List[Any]:
         with self.Session() as session:
@@ -198,39 +192,28 @@ class Database:
 
     def get_user_id(self, user_name: str) -> int:
         with self.Session() as session:
-            user_ids = session.query(Message.user_id).filter(Message.user_name == user_name).distinct().all()
-            assert user_ids
-            return int(user_ids[0][0])
+            user_id = session.query(Message.user_id).filter(Message.user_name == user_name).distinct().first()
+            assert user_id, f"User ID not found for {user_name}"
+            return int(user_id[0])
 
     def get_current_model(self, user_id: int) -> str:
         with self.Session() as session:
-            model = session.query(Model).filter(Model.user_id == user_id).first()
-            if model:
-                return model.model
-            return DEFAULT_MODEL
+            model = session.query(Model).filter(Model.user_id == user_id).one_or_none()
+            return model.model if model else DEFAULT_MODEL
 
     def set_current_model(self, user_id: int, model_name: str) -> None:
         with self.Session() as session:
-            model = session.query(Model).filter(Model.user_id == user_id).first()
+            model = session.query(Model).filter(Model.user_id == user_id).one_or_none()
             if model:
                 model.model = model_name
             else:
-                new_model = Model(user_id=user_id, model=model_name)
-                session.add(new_model)
+                session.add(Model(user_id=user_id, model=model_name))
             session.commit()
 
     def get_current_model_parameters(self, user_id: int) -> Optional[ModelParameters]:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            params = (
-                session.query(ModelParameters)
-                .filter(ModelParameters.user_id == user_id)
-                .filter(ModelParameters.model == current_model)
-                .first()
-            )
-            if params:
-                return params
-            return None
+            return session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
 
     def get_system_prompt(self, user_id: int, default_prompts: Dict[str, str]) -> str:
         current_model = self.get_current_model(user_id)
@@ -242,58 +225,39 @@ class Database:
     def set_system_prompt(self, user_id: int, text: str) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            params = (
-                session.query(ModelParameters)
-                .filter(ModelParameters.user_id == user_id)
-                .filter(ModelParameters.model == current_model)
-                .first()
-            )
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
             if params:
                 params.prompt = text
             else:
-                params = ModelParameters(user_id=user_id, model=current_model, prompt=text)
-                session.add(params)
+                session.add(ModelParameters(user_id=user_id, model=current_model, prompt=text))
             session.commit()
 
     def get_short_name(self, user_id: int) -> str:
         params = self.get_current_model_parameters(user_id)
-        if params and params.short_name:
-            return params.short_name
-        return DEFAULT_SHORT_NAME
+        return params.short_name if params and params.short_name else DEFAULT_SHORT_NAME
 
     def set_short_name(self, user_id: int, text: str) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            params = (
-                session.query(ModelParameters)
-                .filter(ModelParameters.user_id == user_id)
-                .filter(ModelParameters.model == current_model)
-                .first()
-            )
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
             if params:
                 params.short_name = text
             else:
-                params = ModelParameters(user_id=user_id, model=current_model, short_name=text)
-                session.add(params)
+                session.add(ModelParameters(user_id=user_id, model=current_model, short_name=text))
             session.commit()
 
-    def set_parameters(self, user_id: int, default_params: Dict[str, Any], **kwargs: Dict[Any, Any]) -> None:
+    def set_parameters(self, user_id: int, default_params: Dict[str, Any], **kwargs: Any) -> None:
         current_model = self.get_current_model(user_id)
         generation_parameters = self.get_parameters(user_id, default_params)
-        for key, value in kwargs.items():
-            generation_parameters[key] = value
+        generation_parameters.update(kwargs)
         with self.Session() as session:
-            params = (
-                session.query(ModelParameters)
-                .filter(ModelParameters.user_id == user_id)
-                .filter(ModelParameters.model == current_model)
-                .first()
-            )
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
             if params:
                 params.generation_parameters = json.dumps(generation_parameters)
             else:
-                params = ModelParameters(user_id=user_id, model=current_model, generation_parameters=json.dumps(params))
-                session.add(params)
+                session.add(
+                    ModelParameters(user_id=user_id, model=current_model, generation_parameters=json.dumps(params))
+                )
             session.commit()
 
     def get_parameters(self, user_id: int, default_params: Dict[str, Any]) -> Dict[str, Any]:
@@ -306,24 +270,16 @@ class Database:
 
     def are_tools_enabled(self, user_id: int) -> bool:
         params = self.get_current_model_parameters(user_id)
-        if params and params.enable_tools is not None:
-            return params.enable_tools
-        return False
+        return params.enable_tools if params and params.enable_tools is not None else False
 
     def set_enable_tools(self, user_id: int, value: bool) -> None:
         current_model = self.get_current_model(user_id)
         with self.Session() as session:
-            params = (
-                session.query(ModelParameters)
-                .filter(ModelParameters.user_id == user_id)
-                .filter(ModelParameters.model == current_model)
-                .first()
-            )
+            params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).one_or_none()
             if params:
                 params.enable_tools = value
             else:
-                params = ModelParameters(user_id=user_id, model=current_model, enable_tools=value)
-                session.add(params)
+                session.add(ModelParameters(user_id=user_id, model=current_model, enable_tools=value))
             session.commit()
 
     def save_user_message(self, content: str, conv_id: str, user_id: int, user_name: Optional[str] = None) -> None:

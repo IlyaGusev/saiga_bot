@@ -8,6 +8,7 @@ import base64
 import textwrap
 from functools import wraps
 from email.utils import parseaddr
+from typing import List, Dict, Any, Optional
 
 import requests
 import fire
@@ -15,7 +16,7 @@ import tiktoken
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, InlineKeyboardButton, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
@@ -93,9 +94,12 @@ SUB_DESCRIPTION = """*Покупка подписки в боте 'Сайга' �
 Цена подписки: *{price} рублей*
 """
 
+ChatMessage = Dict[str, Any]
+ChatMessages = List[ChatMessage]
+
 
 class Tokenizer:
-    tokenizers = dict()
+    tokenizers: Dict[str, AutoTokenizer] = dict()
 
     @classmethod
     def get(cls, model_name: str):
@@ -138,11 +142,11 @@ class LlmBot:
         bot_token: str,
         client_config_path: str,
         db_path: str,
-        chunk_size: int,
-        characters_path: str,
-        tools_config_path: str,
-        yookassa_config_path: str,
         localization_config_path: str,
+        chunk_size: Optional[int],
+        characters_path: Optional[str],
+        tools_config_path: Optional[str],
+        yookassa_config_path: Optional[str],
     ):
         # Клиент
         with open(client_config_path) as r:
@@ -171,7 +175,7 @@ class LlmBot:
         assert self.model_names
         assert self.default_prompts
 
-        self.localization = Localization(localization_config_path, "ru")
+        self.localization = Localization.load(localization_config_path, "ru")
 
         # Инструменты
         self.tools = dict()
@@ -261,7 +265,7 @@ class LlmBot:
                 config = json.load(r)
                 self.yookassa = YookassaHandler(**config)
 
-    async def start_polling(self):
+    async def start_polling(self) -> None:
         self.scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
         if self.yookassa is not None:
             self.scheduler.add_job(self.yookassa_check_payments, trigger="interval", seconds=30)
@@ -269,7 +273,8 @@ class LlmBot:
         self.bot_info = await self.bot.get_me()
         await self.dp.start_polling(self.bot)
 
-    async def start(self, message: Message):
+    async def start(self, message: Message) -> None:
+        assert message.from_user
         user_id = message.from_user.id
         chat_id = message.chat.id
         self.db.create_conv_id(chat_id)
@@ -285,13 +290,14 @@ class LlmBot:
     # История сообщений
     #
 
-    async def reset(self, message: Message):
+    async def reset(self, message: Message) -> None:
         chat_id = message.chat.id
         self.db.create_conv_id(chat_id)
         await message.reply(self.localization.RESET)
 
-    async def history(self, message: Message):
+    async def history(self, message: Message) -> None:
         chat_id = message.chat.id
+        assert message.from_user
         is_chat = chat_id != message.from_user.id
         conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
@@ -301,13 +307,14 @@ class LlmBot:
             history = self._replace_images(history)
             history = self._prepare_history(history, model=model, is_chat=is_chat)
             tokens_count = self._count_tokens(history, model=model)
-            history = json.dumps(history, ensure_ascii=False)
-            history = self._truncate_text(history)
-            message_text = self.localization.HISTORY.format(tokens_count=tokens_count, history=history)
+            plain_history = json.dumps(history, ensure_ascii=False)
+            plain_history = self._truncate_text(plain_history)
+            message_text = self.localization.HISTORY.format(tokens_count=tokens_count, history=plain_history)
         await message.reply(message_text)
 
-    async def _save_chat_message(self, message: Message):
+    async def _save_chat_message(self, message: Message) -> None:
         chat_id = message.chat.id
+        assert message.from_user
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
         content = await self._build_content(message)
@@ -325,6 +332,8 @@ class LlmBot:
 
     @check_admin
     async def set_model_button_handler(self, callback: CallbackQuery):
+        assert callback.message
+        assert callback.data
         chat_id = callback.message.chat.id
         model_name = callback.data.split(":")[1]
         assert model_name in self.clients
@@ -342,7 +351,7 @@ class LlmBot:
     #
 
     @check_admin
-    async def set_system(self, message: Message, command: Command):
+    async def set_system(self, message: Message, command: CommandObject) -> None:
         chat_id = message.chat.id
         text = command.args
         text = text if text else ""
@@ -351,14 +360,14 @@ class LlmBot:
         text = self._truncate_text(text)
         await message.reply(self.localization.NEW_SYSTEM_PROMPT.format(system_prompt=text))
 
-    async def get_system(self, message: Message):
+    async def get_system(self, message: Message) -> None:
         chat_id = message.chat.id
         prompt = self.db.get_system_prompt(chat_id, self.default_prompts)
         if not prompt.strip():
             prompt = self.localization.EMPTY_SYSTEM_PROMPT
         await message.reply(prompt)
 
-    async def reset_system(self, message: Message):
+    async def reset_system(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
         self.db.set_system_prompt(chat_id, self.default_prompts.get(model, ""))
@@ -370,7 +379,7 @@ class LlmBot:
     #
 
     @check_admin
-    async def set_short_name(self, message: Message, command: Command):
+    async def set_short_name(self, message: Message, command: CommandObject):
         chat_id = message.chat.id
         text = command.args
         text = text if text else ""
@@ -398,6 +407,8 @@ class LlmBot:
 
     @check_admin
     async def set_character_button_handler(self, callback: CallbackQuery):
+        assert callback.message
+        assert callback.data
         chat_id = callback.message.chat.id
         char_name = callback.data.split(":")[1]
         assert char_name in self.characters
@@ -415,7 +426,7 @@ class LlmBot:
     # Лимиты
     #
 
-    def _count_remaining_messages(self, user_id: int, model: str):
+    def _count_remaining_messages(self, user_id: int, model: str) -> int:
         is_subscribed = self.db.is_subscribed_user(user_id)
         mode = "standard" if not is_subscribed else "subscribed"
         limit = self.limits[model][mode]["limit"]
@@ -424,7 +435,8 @@ class LlmBot:
         remaining_count = limit - count
         return max(0, remaining_count)
 
-    async def get_count(self, message: Message) -> int:
+    async def get_count(self, message: Message) -> None:
+        assert message.from_user
         user_id = message.from_user.id
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
@@ -432,7 +444,8 @@ class LlmBot:
         text = self.localization.REMAINING_MESSAGES.format(model=model, remaining_count=remaining_count)
         await message.reply(text)
 
-    async def sub_info(self, message: Message):
+    async def sub_info(self, message: Message) -> None:
+        assert message.from_user
         user_id = message.from_user.id
         remaining_seconds = self.db.get_subscription_info(user_id)
         text = self.localization.INACTIVE_SUB
@@ -451,6 +464,7 @@ class LlmBot:
         return "\n".join(sub_limits)
 
     async def sub_buy(self, message: Message):
+        assert message.from_user
         user_id = message.from_user.id
         email = self.db.get_email(user_id)
         if not email:
@@ -474,12 +488,12 @@ class LlmBot:
 
     async def yookassa_sub_buy_proceed(self, callback: CallbackQuery):
         assert self.yookassa
+        assert callback.from_user
+        assert callback.message
         user_id = callback.from_user.id
         email = self.db.get_email(user_id)
         if not email:
-            await callback.message.reply(
-                "Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек."
-            )
+            await callback.message.reply(self.localization.SET_EMAIL)
             return
 
         chat_id = callback.message.chat.id
@@ -495,6 +509,7 @@ class LlmBot:
 
         timestamp = self.db.get_current_ts()
         title = SUB_TITLE.format(user_id=user_id)
+        assert self.bot_info
         payment_data = self.yookassa.create_payment(SUB_PRICE, title, email=email, bot_username=self.bot_info.username)
         payment_id = payment_data["id"]
         try:
@@ -507,7 +522,7 @@ class LlmBot:
         except Exception:
             self.yookassa.yookassa.cancel_payment(payment_id)
 
-    async def yookassa_check_payments(self):
+    async def yookassa_check_payments(self) -> None:
         assert self.yookassa
 
         payments = self.db.get_waiting_payments()
@@ -526,7 +541,9 @@ class LlmBot:
                 await self.bot.send_message(chat_id=payment.chat_id, text="Платёж отменён!")
                 self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
 
-    async def set_email(self, message: Message):
+    async def set_email(self, message: Message) -> None:
+        assert message.text
+        assert message.from_user
         email = message.text.replace("/setemail", "").strip()
         is_valid = "@" in parseaddr(email)[1]
         if not is_valid:
@@ -540,22 +557,26 @@ class LlmBot:
     #
 
     @check_admin
-    async def set_temperature(self, message: Message):
+    async def set_temperature(self, message: Message) -> None:
         await message.reply("Выберите температуру:", reply_markup=self.temperature_kb.as_markup())
 
     @check_admin
-    async def set_temperature_button_handler(self, callback: CallbackQuery):
+    async def set_temperature_button_handler(self, callback: CallbackQuery) -> None:
+        assert callback.message
+        assert callback.data
         chat_id = callback.message.chat.id
         temperature = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, temperature=temperature)
         await callback.message.edit_text(f"Новая температура задана:\n\n{temperature}")
 
     @check_admin
-    async def set_top_p(self, message: Message):
+    async def set_top_p(self, message: Message) -> None:
         await message.reply("Выберите top-p:", reply_markup=self.top_p_kb.as_markup())
 
     @check_admin
     async def set_top_p_button_handler(self, callback: CallbackQuery):
+        assert callback.message
+        assert callback.data
         chat_id = callback.message.chat.id
         top_p = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, top_p=top_p)
@@ -570,13 +591,13 @@ class LlmBot:
     # Инструменты
     #
 
-    def _get_tools(self, chat_id):
+    def _get_tools(self, chat_id: int) -> Optional[List[Dict[str, Any]]]:
         model = self.db.get_current_model(chat_id)
         if self.can_handle_tools[model] and self.tools and self.db.are_tools_enabled(chat_id):
             return [t.get_specification() for t in self.tools.values()]
         return None
 
-    async def toogle_tools(self, message: Message):
+    async def toogle_tools(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
         if not self.can_handle_tools[model]:
@@ -693,6 +714,7 @@ class LlmBot:
     #
 
     async def generate(self, message: Message):
+        assert message.from_user
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
         chat_id = user_id
@@ -700,6 +722,7 @@ class LlmBot:
         if message.chat.type in ("group", "supergroup"):
             chat_id = message.chat.id
             is_chat = True
+            assert self.bot_info
             is_reply = message.reply_to_message and message.reply_to_message.from_user.id == self.bot_info.id
             bot_short_name = self.db.get_short_name(chat_id)
             bot_names = ["@" + self.bot_info.username, bot_short_name]
@@ -766,7 +789,11 @@ class LlmBot:
             answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
 
             chunk_size = self.chunk_size
-            answer_parts = [answer[i : i + chunk_size] for i in range(0, len(answer), chunk_size)]
+            if chunk_size is not None:
+                answer_parts = [answer[i : i + chunk_size] for i in range(0, len(answer), chunk_size)]
+            else:
+                answer_parts = [answer]
+
             new_message = await placeholder.edit_text(answer_parts[0])
             for part in answer_parts[1:]:
                 new_message = await message.reply(part)
@@ -826,21 +853,24 @@ class LlmBot:
             text = message.text
             chat_id = message.chat.id
             bot_short_name = self.db.get_short_name(chat_id)
+            assert self.bot_info
             text = text.replace("@" + self.bot_info.username, bot_short_name).strip()
             return text
 
         photo = None
         photo_ext = (".jpg", "jpeg", ".png", ".webp", ".gif")
         if content_type == "photo":
-            document = message.photo[-1]
-            file_info = await self.bot.get_file(document.file_id)
+            assert message.photo
+            file_info = await self.bot.get_file(message.photo[-1].file_id)
             photo = file_info.file_path
         elif content_type == "document":
             document = message.document
-            file_info = await self.bot.get_file(document.file_id)
-            file_path = file_info.file_path
-            if "." + file_path.split(".")[-1].lower() in photo_ext:
-                photo = file_path
+            if document:
+                file_info = await self.bot.get_file(document.file_id)
+                if file_info and file_info.file_path:
+                    file_path = file_info.file_path
+                    if "." + file_path.split(".")[-1].lower() in photo_ext:
+                        photo = file_path
 
         if photo:
             file_stream = await self.bot.download_file(photo)
@@ -848,7 +878,7 @@ class LlmBot:
             file_stream.seek(0)
             base64_image = base64.b64encode(file_stream.read()).decode("utf-8")
             assert base64_image
-            content = []
+            content: ChatMessages = []
             if message.caption:
                 content.append({"type": "text", "text": message.caption})
             content.append(
@@ -866,6 +896,9 @@ class LlmBot:
     #
 
     async def save_feedback(self, callback: CallbackQuery):
+        assert callback.from_user
+        assert callback.message
+        assert callback.data
         user_id = callback.from_user.id
         message_id = callback.message.message_id
         feedback = callback.data.split(":")[1]
@@ -874,7 +907,7 @@ class LlmBot:
             chat_id=callback.message.chat.id, message_id=message_id, reply_markup=None
         )
 
-    def _count_tokens(self, messages, model):
+    def _count_tokens(self, messages: ChatMessages, model: str) -> int:
         url = str(self.clients[model].base_url)
         tokens_count = 0
 
@@ -898,7 +931,7 @@ class LlmBot:
         tokens_count = len(tokens)
         return tokens_count
 
-    async def _is_admin(self, user_id, chat_id):
+    async def _is_admin(self, user_id: int, chat_id: int) -> bool:
         chat_member = await self.bot.get_chat_member(chat_id, user_id)
         return chat_member.status in [
             ChatMemberStatus.ADMINISTRATOR,
@@ -906,7 +939,7 @@ class LlmBot:
         ]
 
     @staticmethod
-    def _merge_messages(messages):
+    def _merge_messages(messages: ChatMessages) -> ChatMessages:
         new_messages = []
         prev_role = None
         for m in messages:
@@ -923,7 +956,7 @@ class LlmBot:
         return new_messages
 
     @staticmethod
-    def _format_chat(messages):
+    def _format_chat(messages: ChatMessages) -> ChatMessages:
         for m in messages:
             content = m["content"]
             role = m["role"]
@@ -934,7 +967,7 @@ class LlmBot:
         return messages
 
     @staticmethod
-    def _fix_broken_tool_calls(messages):
+    def _fix_broken_tool_calls(messages: ChatMessages) -> ChatMessages:
         clean_messages = []
         is_expecting_tool_answer = False
         for m in messages:
@@ -946,7 +979,7 @@ class LlmBot:
             clean_messages = clean_messages[:-1]
         return clean_messages
 
-    def _prepare_history(self, history, model: str, is_chat: bool = False):
+    def _prepare_history(self, history: ChatMessages, model: str, is_chat: bool = False):
         if is_chat:
             history = self._format_chat(history)
         assert history
@@ -967,31 +1000,31 @@ class LlmBot:
         assert history
         return history
 
-    def _get_user_name(self, user):
+    def _get_user_name(self, user) -> str:
         return user.full_name if user.full_name else user.username
 
-    def _crop_content(self, content):
+    def _crop_content(self, content: str) -> str:
         if isinstance(content, str):
             return content.replace("\n", " ")[:40]
         return IMAGE_PLACEHOLDER
 
-    def _is_image_content(self, content):
+    def _is_image_content(self, content: Any) -> bool:
         return isinstance(content, list) and content[-1]["type"] == "image_url"
 
-    def _fix_image_roles(self, messages):
+    def _fix_image_roles(self, messages: ChatMessages) -> ChatMessages:
         for m in messages:
             if self._is_image_content(m["content"]):
                 m["role"] = "user"
         return messages
 
-    def _replace_images(self, messages):
+    def _replace_images(self, messages: ChatMessages) -> ChatMessages:
         for m in messages:
             if self._is_image_content(m["content"]):
                 m["content"] = IMAGE_PLACEHOLDER
         return messages
 
-    def _truncate_text(self, text: str):
-        if len(text) > self.chunk_size:
+    def _truncate_text(self, text: str) -> str:
+        if self.chunk_size and len(text) > self.chunk_size:
             text = text[: self.chunk_size] + "... truncated"
         return text
 
@@ -1001,10 +1034,10 @@ def main(
     client_config_path: str,
     db_path: str,
     localization_config_path: str,
-    chunk_size: int = 3500,
-    characters_path: str = None,
-    tools_config_path: str = None,
-    yookassa_config_path: str = None,
+    chunk_size: Optional[int] = 3500,
+    characters_path: Optional[str] = None,
+    tools_config_path: Optional[str] = None,
+    yookassa_config_path: Optional[str] = None,
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
