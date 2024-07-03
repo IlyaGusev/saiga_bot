@@ -11,7 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker, mapped_column, Mapped
 metadata = MetaData()
 
 DEFAULT_SHORT_NAME = "Сайга"
-DEFAULT_MODEL = "saiga-v6"
+DEFAULT_MODEL = "saiga-v7"
 DEFAULT_PARAMS = {
     "temperature": 0.6,
     "top_p": 0.9,
@@ -103,6 +103,14 @@ class Email(Base):
     email: Mapped[str]
 
 
+class Charge(Base):
+    __tablename__ = "charges"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int]
+    timestamp: Mapped[int]
+    charge_id: Mapped[str]
+
+
 class Database:
     def __init__(self, db_path: str):
         self.engine = create_engine(f"sqlite:///{db_path}")
@@ -120,6 +128,12 @@ class Database:
                 obj.email = email
             else:
                 session.add(Email(user_id=user_id, email=email))
+            session.commit()
+
+    def add_charge(self, user_id: int, charge_id: str) -> None:
+        with self.Session() as session:
+            timestamp = self.get_current_ts()
+            session.add(Charge(user_id=user_id, charge_id=charge_id, timestamp=timestamp))
             session.commit()
 
     def get_email(self, user_id: int) -> Optional[str]:

@@ -14,7 +14,17 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, InlineKeyboardButton, CallbackQuery, BufferedInputFile, User
+from aiogram.types import (
+    Message,
+    InlineKeyboardButton,
+    CallbackQuery,
+    BufferedInputFile,
+    User,
+    ContentType,
+    PreCheckoutQuery,
+    LabeledPrice,
+    SuccessfulPayment,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
@@ -81,7 +91,8 @@ START_TEMPLATE = """
 
 IMAGE_PLACEHOLDER = "<image_placeholder>"
 
-SUB_PRICE = 500
+SUB_PRICE_RUB = 500
+SUB_PRICE_STARS = 250
 SUB_TITLE = 'Покупка подписки в боте "Сайга" на неделю для пользователя {user_id}'
 SUB_DESCRIPTION = """*Покупка подписки в боте 'Сайга' на неделю*
 
@@ -226,6 +237,7 @@ class LlmBot:
             self.top_p_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settopp:{value}"))
 
         self.buy_kb = InlineKeyboardBuilder()
+        self.buy_kb.add(InlineKeyboardButton(text="Купить (за Telegram Stars)", callback_data="buy:stars"))
 
         # Бот
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
@@ -251,6 +263,9 @@ class LlmBot:
         self.dp.message.register(self.sub_buy, Command("subbuy"))
         self.dp.message.register(self.toogle_tools, Command("tools"))
         self.dp.message.register(self.history, Command("history"))
+        self.dp.message.register(
+            self.successful_payment_handler, lambda message: message.content_type == ContentType.SUCCESSFUL_PAYMENT
+        )
         self.dp.message.register(self.generate)
 
         self.dp.callback_query.register(self.save_feedback, F.data.startswith("feedback:"))
@@ -259,12 +274,14 @@ class LlmBot:
         self.dp.callback_query.register(self.set_temperature_button_handler, F.data.startswith("settemperature:"))
         self.dp.callback_query.register(self.set_top_p_button_handler, F.data.startswith("settopp:"))
         self.dp.callback_query.register(self.yookassa_sub_buy_proceed, F.data.startswith("buy:yookassa"))
+        self.dp.callback_query.register(self.stars_sub_buy_proceed, F.data.startswith("buy:stars"))
+        self.dp.pre_checkout_query.register(self.pre_checkout_handler)
 
         # Платежи
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.yookassa: Optional[YookassaHandler] = None
         if yookassa_config_path and os.path.exists(yookassa_config_path):
-            self.buy_kb.add(InlineKeyboardButton(text="Купить (из России)", callback_data="buy:yookassa"))
+            self.buy_kb.add(InlineKeyboardButton(text="Купить (за рубли)", callback_data="buy:yookassa"))
             with open(yookassa_config_path) as r:
                 config = json.load(r)
                 self.yookassa = YookassaHandler(**config)
@@ -456,7 +473,7 @@ class LlmBot:
         remaining_seconds = self.db.get_subscription_info(user_id)
         text = self.localization.INACTIVE_SUB
         if remaining_seconds > 0:
-            text = self.localization.ACTIVE_SUB.format(remaining_seconds=remaining_seconds)
+            text = self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600)
         await message.reply(text)
 
     def _get_limits(self) -> str:
@@ -472,11 +489,6 @@ class LlmBot:
     async def sub_buy(self, message: Message) -> None:
         assert message.from_user
         user_id = message.from_user.id
-        email = self.db.get_email(user_id)
-        if not email:
-            await message.reply(self.localization.SET_EMAIL)
-            return
-
         chat_id = message.chat.id
         is_chat = chat_id != user_id
         if is_chat:
@@ -489,8 +501,57 @@ class LlmBot:
             return
 
         sub_limits = self._get_limits()
-        description = SUB_DESCRIPTION.format(sub_limits=sub_limits, price=SUB_PRICE)
+        description = SUB_DESCRIPTION.format(sub_limits=sub_limits, price=SUB_PRICE_RUB)
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
+
+    async def stars_sub_buy_proceed(self, callback: CallbackQuery) -> None:
+        assert callback.from_user
+        assert callback.message
+        assert isinstance(callback.message, Message)
+        user_id = callback.from_user.id
+        chat_id = callback.message.chat.id
+        is_chat = chat_id != user_id
+        if is_chat:
+            await callback.message.reply("Подписку можно купить только в переписке с самим ботом!")
+            return
+
+        remaining_seconds = self.db.get_subscription_info(user_id)
+        if remaining_seconds > 0:
+            await callback.message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
+            return
+
+        title = "Подписка на неделю"
+        await self.bot.send_invoice(
+            chat_id,
+            title=title,
+            description=title,
+            prices=[LabeledPrice(label=title, amount=SUB_PRICE_STARS)],
+            provider_token="",
+            currency="XTR",
+            payload=str(user_id),
+            reply_to_message_id=callback.message.message_id,
+        )
+
+    async def pre_checkout_handler(self, pre_checkout_query: PreCheckoutQuery) -> None:
+        try:
+            await self.bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+        except Exception as e:
+            await self.bot.answer_pre_checkout_query(pre_checkout_query.id, ok=False, error_message=str(e))
+
+    async def successful_payment_handler(self, message: Message) -> None:
+        assert message.successful_payment
+        successful_payment: SuccessfulPayment = message.successful_payment
+        assert message.chat
+        assert message.from_user
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        assert successful_payment
+        payload = successful_payment.invoice_payload
+        charge_id = successful_payment.telegram_payment_charge_id
+        self.db.add_charge(user_id, charge_id)
+        assert user_id == int(payload)
+        self.db.subscribe_user(user_id, 7 * 86400)
+        await self.bot.send_message(chat_id, "Спасибо за оплату! Подписка на неделю оформлена!")
 
     async def yookassa_sub_buy_proceed(self, callback: CallbackQuery) -> None:
         assert self.yookassa
@@ -518,7 +579,9 @@ class LlmBot:
         title = SUB_TITLE.format(user_id=user_id)
         assert self.bot_info
         assert self.bot_info.username
-        payment_data = self.yookassa.create_payment(SUB_PRICE, title, email=email, bot_username=self.bot_info.username)
+        payment_data = self.yookassa.create_payment(
+            SUB_PRICE_RUB, title, email=email, bot_username=self.bot_info.username
+        )
         payment_id = payment_data["id"]
         try:
             url = payment_data["confirmation"]["confirmation_url"]

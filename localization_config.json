@@ -14,7 +14,7 @@
         "NEW_CHARACTER": "Новый персонаж задан:\n\n{system_prompt}\n\nМожно обращаться так: '{name}'",
         "HISTORY": "{tokens_count} токенов: {history}",
         "INACTIVE_SUB": "Подписка неактивна",
-        "ACTIVE_SUB": "Подписка активирована! Осталось {remaining_seconds//3600}ч",
+        "ACTIVE_SUB": "Подписка активирована! Осталось {remaining_hours}ч",
         "REMAINING_MESSAGES": "Осталось запросов к {model}: {remaining_count}",
         "SET_EMAIL": "Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек."
     }
