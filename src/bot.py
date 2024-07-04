@@ -48,51 +48,12 @@ DEFAULT_MESSAGE_COUNT_LIMIT = {
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 DALLE_DAILY_LIMIT = 5
-CONTACT_USERNAME = "YallenGusev"
-START_TEMPLATE = """
-Привет! Я Сайга, бот с разными языковыми моделями.
-Текущая модель: {model}
-Осталось сообщений: {message_count}
-
-Лимиты:
-{sub_limits}
-
-Доступные команды:
-/help - вызов этого сообщения
-/reset - очистить историю сообщений с ботом
-/setmodel - выбрать модель
-/getmodel - узнать текущую модель
-/setcharacter - задать персонажа
-/setsystem ... - задать системный промпт, нужно писать в этом же сообщении
-/getsystem - узнать текущий системный промпт
-/resetsystem - сбросить системный промпт к стандартному
-/setshortname ... - задать имя бота, нужно писать в этом же сообщении
-/getshortname - узнать имя ботя
-/getcount - узнать текущий лимит сообщений
-/getparams - узнать текущие параметры генерации
-/settemperature - задать температуру
-/subinfo - информация о текущей подписке
-/subbuy - купить подписку
-/setemail ... - задать e-mail, чтобы купить подписку, нужно писать в этом же сообщении
-/tools - включить/выключить инструменты (плагины)
-
-Инструменты, доступные для gpt-4o и claude-3-5-sonnet:
-- Поиск в интернете
-- Чтение страниц в интернете
-- Текущая дата и время
-- Генерация изображений с DALL-E
-- Интерпретатор Python
-
-Исходники: [saiga_bot](https://github.com/IlyaGusev/saiga_bot)
-Модель по умолчанию: [saiga_llama3_8b](https://huggingface.co/IlyaGusev/saiga_llama3_8b)
-
-По всем вопросам писать @{contact_username}
-"""
-
+ADMIN_USERNAME = "YallenGusev"
 IMAGE_PLACEHOLDER = "<image_placeholder>"
 
 SUB_PRICE_RUB = 500
 SUB_PRICE_STARS = 250
+SUB_DURATION = 7 * 86400
 SUB_TITLE = 'Покупка подписки в боте "Сайга" на неделю для пользователя {user_id}'
 SUB_DESCRIPTION = """*Покупка подписки в боте 'Сайга' на неделю*
 
@@ -301,9 +262,10 @@ class LlmBot:
         self.db.create_conv_id(chat_id)
         model = self.db.get_current_model(chat_id)
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
-        sub_limits = self._get_limits()
-        content = START_TEMPLATE.format(
-            model=model, message_count=remaining_count, sub_limits=sub_limits, contact_username=CONTACT_USERNAME
+        mode = "standard" if self.db.get_subscription_info(user_id) <= 0 else "subscribed"
+        sub_limits = self.localization.LIMITS.render(limits=self.limits, mode=mode).strip()
+        content = self.localization.HELP.render(
+            model=model, message_count=remaining_count, sub_limits=sub_limits, admin_username=ADMIN_USERNAME
         )
         await message.reply(content, parse_mode=ParseMode.MARKDOWN)
 
@@ -476,31 +438,21 @@ class LlmBot:
             text = self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600)
         await message.reply(text)
 
-    def _get_limits(self) -> str:
-        template = "- *{model}*: {count} сообщений каждые {hours} часа"
-        sub_limits = [
-            template.format(
-                model=model, count=limit["subscribed"]["limit"], hours=limit["subscribed"]["interval"] // 3600
-            )
-            for model, limit in self.limits.items()
-        ]
-        return "\n".join(sub_limits)
-
     async def sub_buy(self, message: Message) -> None:
         assert message.from_user
         user_id = message.from_user.id
         chat_id = message.chat.id
         is_chat = chat_id != user_id
         if is_chat:
-            await message.reply("Подписку можно купить только в переписке с самим ботом!")
+            await message.reply(self.localization.SUB_NOT_CHAT)
             return
 
         remaining_seconds = self.db.get_subscription_info(user_id)
         if remaining_seconds > 0:
-            await message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
+            await message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
-        sub_limits = self._get_limits()
+        sub_limits = self.localization.LIMITS.render(limits=self.limits, mode="subscribed").strip()
         description = SUB_DESCRIPTION.format(sub_limits=sub_limits, price=SUB_PRICE_RUB)
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
@@ -512,12 +464,12 @@ class LlmBot:
         chat_id = callback.message.chat.id
         is_chat = chat_id != user_id
         if is_chat:
-            await callback.message.reply("Подписку можно купить только в переписке с самим ботом!")
+            await callback.message.reply(self.localization.SUB_NOT_CHAT)
             return
 
         remaining_seconds = self.db.get_subscription_info(user_id)
         if remaining_seconds > 0:
-            await callback.message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
+            await callback.message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
         title = "Подписка на неделю"
@@ -550,8 +502,8 @@ class LlmBot:
         charge_id = successful_payment.telegram_payment_charge_id
         self.db.add_charge(user_id, charge_id)
         assert user_id == int(payload)
-        self.db.subscribe_user(user_id, 7 * 86400)
-        await self.bot.send_message(chat_id, "Спасибо за оплату! Подписка на неделю оформлена!")
+        self.db.subscribe_user(user_id, SUB_DURATION)
+        await self.bot.send_message(chat_id, self.localization.SUB_SUCCESS)
 
     async def yookassa_sub_buy_proceed(self, callback: CallbackQuery) -> None:
         assert self.yookassa
@@ -567,12 +519,12 @@ class LlmBot:
         chat_id = callback.message.chat.id
         is_chat = chat_id != user_id
         if is_chat:
-            await callback.message.reply("Подписку можно купить только в переписке с самим ботом!")
+            await callback.message.reply(self.localization.SUB_NOT_CHAT)
             return
 
         remaining_seconds = self.db.get_subscription_info(user_id)
         if remaining_seconds > 0:
-            await callback.message.reply(f"У вас уже есть подписка! Она закончится через {remaining_seconds//3600}ч")
+            await callback.message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
         timestamp = self.db.get_current_ts()
@@ -604,9 +556,8 @@ class LlmBot:
                 payment_id=payment.payment_id, status=status, internal_status=payment.internal_status
             )
             if status == YookassaStatus.SUCCEEDED:
-                self.db.subscribe_user(payment.user_id, 7 * 86400)
-                text = "Платёж получен, подписка выдана! Узнать статус: /subinfo"
-                await self.bot.send_message(chat_id=payment.chat_id, text=text)
+                self.db.subscribe_user(payment.user_id, SUB_DURATION)
+                await self.bot.send_message(chat_id=payment.chat_id, text=self.localization.SUB_SUCCESS)
                 self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
             elif status == YookassaStatus.CANCELED:
                 await self.bot.send_message(chat_id=payment.chat_id, text="Платёж отменён!")
@@ -821,21 +772,19 @@ class LlmBot:
 
         model = self.db.get_current_model(chat_id)
         if model not in self.clients:
-            await message.reply("Выбранная модель больше не поддерживается, переключите на другую с помощью /setmodel")
+            await message.reply(self.localization.MODEL_NOT_SUPPORTED)
             return
 
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         print(user_id, model, remaining_count)
         if remaining_count <= 0:
-            await message.reply(
-                f"Превышен дневной лимит запросов по {model}, подождите или переключите модель с /setmodel"
-            )
+            await message.reply(self.localization.LIMIT_EXCEEDED.format(model=model))
             return
 
         params = self.db.get_parameters(chat_id, self.default_params)
         assert params
         if "claude" in model and params["temperature"] > 1.0:
-            await message.reply("Claude не поддерживает температуру выше 1, задайте новую с помощью /settemperature")
+            await message.reply(self.localization.CLAUDE_HIGH_TEMPERATURE)
             return
 
         conv_id = self.db.get_current_conv_id(chat_id)
@@ -844,10 +793,10 @@ class LlmBot:
 
         content = await self._build_content(message)
         if not isinstance(content, str) and not self.can_handle_images[model]:
-            await message.reply("Выбранная модель не может обработать ваше сообщение")
+            await message.reply(self.localization.CONTENT_NOT_SUPPORTED_BY_MODEL)
             return
         if content is None:
-            await message.reply("Такой тип сообщений (ещё) не поддерживается")
+            await message.reply(self.localization.CONTENT_NOT_SUPPORTED)
             return
 
         self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
@@ -907,8 +856,7 @@ class LlmBot:
 
         except Exception:
             traceback.print_exc()
-            text = "Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться."
-            text += f" Попробуйте сделать /reset и пришлите @{CONTACT_USERNAME} вот это число: {chat_id}"
+            text = self.localization.ERROR.format(admin_username=ADMIN_USERNAME, chat_id=chat_id)
             await placeholder.edit_text(text)
 
     async def _query_api(self, model: str, messages: ChatMessages, system_prompt: str, **kwargs: Any) -> str:
@@ -1088,12 +1036,12 @@ class LlmBot:
             m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or self.can_handle_tools[model]
         ]
         assert history
-        history = self._merge_messages(history)
-        assert history
         tokens_count = self._count_tokens(history, model=model)
         while tokens_count > self.history_max_tokens[model] and len(history) >= 3:
             history = history[2:]
             tokens_count = self._count_tokens(history, model=model)
+        assert history
+        history = self._merge_messages(history)
         assert history
         return history
 

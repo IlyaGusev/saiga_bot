@@ -1,0 +1,3 @@
+{% for model, limit in limits.items() %}
+- *{{model}}*: {{limit[mode]["limit"]}} сообщений каждые {{limit[mode]["interval"] // 3600}} часа
+{%- endfor %}
