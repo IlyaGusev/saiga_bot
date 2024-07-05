@@ -1062,7 +1062,11 @@ class LlmBot:
     def _replace_images(self, messages: ChatMessages) -> ChatMessages:
         for m in messages:
             if self._is_image_content(m["content"]):
-                m["content"] = IMAGE_PLACEHOLDER
+                texts = []
+                for item in m["content"]:
+                    if "text" in item:
+                        texts.append(item["text"])
+                m["content"] = IMAGE_PLACEHOLDER + "\n" + "\n".join(texts)
         return messages
 
     def _truncate_text(self, text: str) -> str:
