@@ -2,7 +2,7 @@ import json
 import pathlib
 from dataclasses import dataclass
 
-from jinja2 import Template
+from jinja2 import Template  # type: ignore
 
 
 DIR_PATH = pathlib.Path(__file__).parent.resolve()
@@ -35,6 +35,8 @@ class Localization:
     ACTIVE_SUB: str
     REMAINING_MESSAGES: str
     SET_EMAIL: str
+    SUB_TITLE: str
+    SUB_SHORT_TITLE: str
     SUB_NOT_CHAT: str
     SUB_SUCCESS: str
     MODEL_NOT_SUPPORTED: str
@@ -45,6 +47,19 @@ class Localization:
     ERROR: str
     HELP: Template
     LIMITS: Template
+    SUB_DESCRIPTION: Template
+    NEW_TEMPERATURE: str
+    NEW_TOP_P: str
+    SELECT_TEMPERATURE: str
+    SELECT_TOP_P: str
+    CURRENT_PARAMS: str
+    TOOLS_NOT_SUPPORTED_BY_MODEL: str
+    ENABLED_TOOLS: str
+    DISABLED_TOOLS: str
+    INCORRECT_EMAIL: str
+    FILLED_EMAIL: str
+    ADMINS_ONLY: str
+    PAYMENT_URL: str
 
     @classmethod
     def load(cls, path: str, language: str) -> "Localization":

@@ -17,6 +17,8 @@
         "ACTIVE_SUB": "Подписка активирована! Осталось {remaining_hours}ч",
         "REMAINING_MESSAGES": "Осталось запросов к {model}: {remaining_count}",
         "SET_EMAIL": "Пожалуйста, сначала задайте свою почту через '/setemail ...'. Туда придёт чек.",
+        "SUB_TITLE": "Покупка подписки в боте 'Сайга' на неделю для пользователя {user_id}",
+        "SUB_SHORT_TITLE": "Покупка подписки на неделю",
         "SUB_NOT_CHAT": "Подписку можно купить только в переписке с самим ботом!",
         "SUB_SUCCESS": "Спасибо за оплату, подписка выдана! Узнать статус: /subinfo",
         "MODEL_NOT_SUPPORTED": "Выбранная модель больше не поддерживается, переключите на другую с помощью /setmodel",
@@ -25,11 +27,26 @@
         "CONTENT_NOT_SUPPORTED_BY_MODEL": "Выбранная модель не может обработать ваше сообщение",
         "CONTENT_NOT_SUPPORTED": "Такой тип сообщений (ещё) не поддерживается",
         "ERROR": "Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться. Попробуйте сделать /reset и пришлите @{admin_username} вот это число: {chat_id}",
+        "NEW_TEMPERATURE": "Новая температура задана:\n\n{temperature}",
+        "NEW_TOP_P": "Новое top-p задано:\n\n{top_p}",
+        "SELECT_TOP_P": "Выберите top-p:",
+        "SELECT_TEMPERATURE": "Выберите температуру:",
+        "CURRENT_PARAMS": "Текущие параметры генерации: {params}",
+        "TOOLS_NOT_SUPPORTED_BY_MODEL": "Для модели {model} инструменты недоступны.",
+        "ENABLED_TOOLS": "Инструменты включены!",
+        "DISABLED_TOOLS": "Инструменты выключены! Чтобы включить их назад, снова наберите /tools",
+        "INCORRECT_EMAIL": "Некорректный e-mail!",
+        "FILLED_EMAIL": "Спасибо! Адрес задан: {email}",
+        "ADMINS_ONLY": "{username}, только админы могут это делать",
+        "PAYMENT_URL": "Ссылка для оплаты: {url}",
         "HELP": {
             "template_name": "ru_help"
         },
         "LIMITS": {
             "template_name": "ru_limits"
+        },
+        "SUB_DESCRIPTION": {
+            "template_name": "ru_sub"
         }
     }
 }

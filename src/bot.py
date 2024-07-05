@@ -54,16 +54,6 @@ IMAGE_PLACEHOLDER = "<image_placeholder>"
 SUB_PRICE_RUB = 500
 SUB_PRICE_STARS = 250
 SUB_DURATION = 7 * 86400
-SUB_TITLE = 'Покупка подписки в боте "Сайга" на неделю для пользователя {user_id}'
-SUB_DESCRIPTION = """*Покупка подписки в боте 'Сайга' на неделю*
-
-Лимиты общения с моделями станут такими:
-{sub_limits}
-
-Подписка будет действовать ровно 7 дней.
-
-Цена подписки: *{price} рублей*
-"""
 
 ChatMessage = Dict[str, Any]
 ChatMessages = List[ChatMessage]
@@ -99,12 +89,12 @@ def check_admin(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., 
         assert user
 
         if chat_id != user_id:
-            user_name = self._get_user_name(user)
+            username = self._get_user_name(user)
             is_admin = await self._is_admin(user_id=user_id, chat_id=chat_id)
             if not is_admin:
                 await self.bot.send_message(
                     chat_id=chat_id,
-                    text=f"{user_name}, только админы могут это делать",
+                    text=self.localization.ADMINS_ONLY.format(username=username),
                 )
                 return
         return await func(self, obj, *args, **kwargs)
@@ -124,7 +114,7 @@ class LlmBot:
         tools_config_path: Optional[str],
         yookassa_config_path: Optional[str],
     ):
-        # Клиент
+        # Providers
         with open(client_config_path) as r:
             client_config = json.load(r)
         self.clients = dict()
@@ -153,7 +143,7 @@ class LlmBot:
 
         self.localization = Localization.load(localization_config_path, "ru")
 
-        # Инструменты
+        # Tools
         self.tools: Dict[str, Tool] = dict()
         if tools_config_path:
             assert os.path.exists(tools_config_path)
@@ -162,19 +152,19 @@ class LlmBot:
                 for tool_name, tool_config in tools_config.items():
                     self.tools[tool_name] = Tool.by_name(tool_name)(**tool_config)
 
-        # Персонажи
+        # Characters
         self.characters = dict()
         if characters_path and os.path.exists(characters_path):
             with open(characters_path) as r:
                 self.characters = json.load(r)
 
-        # Параметры
+        # Output parameters
         self.chunk_size = chunk_size
 
-        # База
+        # Database
         self.db = Database(db_path)
 
-        # Клавиатуры
+        # Keyboards
         self.models_kb = InlineKeyboardBuilder()
         for model_id in self.clients.keys():
             self.models_kb.row(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
@@ -200,7 +190,7 @@ class LlmBot:
         self.buy_kb = InlineKeyboardBuilder()
         self.buy_kb.add(InlineKeyboardButton(text="Купить (за Telegram Stars)", callback_data="buy:stars"))
 
-        # Бот
+        # Bot events
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
         self.bot_info: Optional[User] = None
         self.dp = Dispatcher()
@@ -236,9 +226,9 @@ class LlmBot:
         self.dp.callback_query.register(self.set_top_p_button_handler, F.data.startswith("settopp:"))
         self.dp.callback_query.register(self.yookassa_sub_buy_proceed, F.data.startswith("buy:yookassa"))
         self.dp.callback_query.register(self.stars_sub_buy_proceed, F.data.startswith("buy:stars"))
-        self.dp.pre_checkout_query.register(self.pre_checkout_handler)
 
-        # Платежи
+        # Payments
+        self.dp.pre_checkout_query.register(self.pre_checkout_handler)
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.yookassa: Optional[YookassaHandler] = None
         if yookassa_config_path and os.path.exists(yookassa_config_path):
@@ -270,7 +260,7 @@ class LlmBot:
         await message.reply(content, parse_mode=ParseMode.MARKDOWN)
 
     #
-    # История сообщений
+    # History management
     #
 
     async def reset(self, message: Message) -> None:
@@ -305,8 +295,57 @@ class LlmBot:
             conv_id = self.db.get_current_conv_id(chat_id)
             self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
 
+    @staticmethod
+    def _format_chat(messages: ChatMessages) -> ChatMessages:
+        for m in messages:
+            content = m["content"]
+            role = m["role"]
+            if role == "user" and content is None:
+                continue
+            if role == "user" and isinstance(content, str) and m["user_name"]:
+                m["content"] = "Из чата пишет {}: {}".format(m["user_name"], content)
+        return messages
+
+    def _prepare_history(self, history: ChatMessages, model: str, is_chat: bool = False) -> ChatMessages:
+        if is_chat:
+            history = self._format_chat(history)
+        assert history
+        save_keys = ("content", "role", "tool_calls", "tool_call_id", "name")
+        history = [{k: m[k] for k in save_keys if m.get(k) is not None or k == "content"} for m in history]
+        history = [m for m in history if not self._is_image_content(m["content"]) or self.can_handle_images[model]]
+        assert history
+        history = [
+            m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or self.can_handle_tools[model]
+        ]
+        assert history
+        tokens_count = self._count_tokens(history, model=model)
+        while tokens_count > self.history_max_tokens[model] and len(history) >= 3:
+            history = history[2:]
+            tokens_count = self._count_tokens(history, model=model)
+        assert history
+        history = self._merge_messages(history)
+        assert history
+        return history
+
+    @staticmethod
+    def _merge_messages(messages: ChatMessages) -> ChatMessages:
+        new_messages: ChatMessages = []
+        prev_role = None
+        for m in messages:
+            content = m["content"]
+            role = m["role"]
+            if role == prev_role and role != "tool":
+                is_current_str = isinstance(content, str)
+                is_prev_str = isinstance(new_messages[-1]["content"], str)
+                if is_current_str and is_prev_str:
+                    new_messages[-1]["content"] += "\n\n" + content
+                    continue
+            prev_role = role
+            new_messages.append(m)
+        return new_messages
+
     #
-    # Выбор модели
+    # Model selection
     #
 
     @check_admin
@@ -331,7 +370,7 @@ class LlmBot:
         await message.reply(model)
 
     #
-    # Системный промпт
+    # System prompt
     #
 
     @check_admin
@@ -359,7 +398,7 @@ class LlmBot:
         await message.reply(self.localization.RESET_SYSTEM_PROMPT)
 
     #
-    # Именование модели
+    # Model names
     #
 
     @check_admin
@@ -382,7 +421,7 @@ class LlmBot:
         await message.reply(text)
 
     #
-    # Персонажи
+    # Characters
     #
 
     @check_admin
@@ -408,7 +447,7 @@ class LlmBot:
         )
 
     #
-    # Лимиты
+    # Limits
     #
 
     def _count_remaining_messages(self, user_id: int, model: str) -> int:
@@ -428,6 +467,10 @@ class LlmBot:
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         text = self.localization.REMAINING_MESSAGES.format(model=model, remaining_count=remaining_count)
         await message.reply(text)
+
+    #
+    # Subscription
+    #
 
     async def sub_info(self, message: Message) -> None:
         assert message.from_user
@@ -453,7 +496,7 @@ class LlmBot:
             return
 
         sub_limits = self.localization.LIMITS.render(limits=self.limits, mode="subscribed").strip()
-        description = SUB_DESCRIPTION.format(sub_limits=sub_limits, price=SUB_PRICE_RUB)
+        description = self.localization.SUB_DESCRIPTION.render(sub_limits=sub_limits, price=SUB_PRICE_RUB)
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
     async def stars_sub_buy_proceed(self, callback: CallbackQuery) -> None:
@@ -472,11 +515,12 @@ class LlmBot:
             await callback.message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
-        title = "Подписка на неделю"
+        title = self.localization.SUB_SHORT_TITLE
+        description = self.localization.SUB_TITLE.format(user_id=user_id)
         await self.bot.send_invoice(
             chat_id,
             title=title,
-            description=title,
+            description=description,
             prices=[LabeledPrice(label=title, amount=SUB_PRICE_STARS)],
             provider_token="",
             currency="XTR",
@@ -528,7 +572,7 @@ class LlmBot:
             return
 
         timestamp = self.db.get_current_ts()
-        title = SUB_TITLE.format(user_id=user_id)
+        title = self.localization.SUB_TITLE.format(user_id=user_id)
         assert self.bot_info
         assert self.bot_info.username
         payment_data = self.yookassa.create_payment(
@@ -541,7 +585,7 @@ class LlmBot:
             self.db.save_payment(
                 payment_id=payment_id, user_id=user_id, chat_id=chat_id, url=url, status=status, timestamp=timestamp
             )
-            await callback.message.reply(f"Ссылка для оплаты: {url}")
+            await callback.message.reply(self.localization.PAYMENT_URL.format(url=url))
         except Exception:
             self.yookassa.cancel_payment(payment_id)
 
@@ -569,18 +613,18 @@ class LlmBot:
         email = message.text.replace("/setemail", "").strip()
         is_valid = "@" in parseaddr(email)[1]
         if not is_valid:
-            await message.reply("Некорректный e-mail!")
+            await message.reply(self.localization.INCORRECT_EMAIL)
             return
         self.db.set_email(message.from_user.id, email)
-        await message.reply(f"Спасибо! Адрес задан: {email}")
+        await message.reply(self.localization.FILLED_EMAIL.format(email=email))
 
     #
-    # Параметры генерации
+    # Generation parameters
     #
 
     @check_admin
     async def set_temperature(self, message: Message) -> None:
-        await message.reply("Выберите температуру:", reply_markup=self.temperature_kb.as_markup())
+        await message.reply(self.localization.SELECT_TEMPERATURE, reply_markup=self.temperature_kb.as_markup())
 
     @check_admin
     async def set_temperature_button_handler(self, callback: CallbackQuery) -> None:
@@ -590,11 +634,11 @@ class LlmBot:
         temperature = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, temperature=temperature)
         assert isinstance(callback.message, Message)
-        await callback.message.edit_text(f"Новая температура задана:\n\n{temperature}")
+        await callback.message.edit_text(self.localization.NEW_TEMPERATURE.format(temperature=temperature))
 
     @check_admin
     async def set_top_p(self, message: Message) -> None:
-        await message.reply("Выберите top-p:", reply_markup=self.top_p_kb.as_markup())
+        await message.reply(self.localization.SELECT_TOP_P, reply_markup=self.top_p_kb.as_markup())
 
     @check_admin
     async def set_top_p_button_handler(self, callback: CallbackQuery) -> None:
@@ -604,15 +648,16 @@ class LlmBot:
         top_p = float(callback.data.split(":")[1])
         self.db.set_parameters(chat_id, self.default_params, top_p=top_p)
         assert isinstance(callback.message, Message)
-        await callback.message.edit_text(f"Новое top-p задано:\n\n{top_p}")
+        await callback.message.edit_text(self.localization.NEW_TOP_P.format(top_p=top_p))
 
     async def get_params(self, message: Message) -> None:
         chat_id = message.chat.id
         params = self.db.get_parameters(chat_id, self.default_params)
-        await message.reply(f"Текущие параметры генерации: {json.dumps(params)}")
+        params_str = json.dumps(params)
+        await message.reply(self.localization.CURRENT_PARAMS.format(params=params_str))
 
     #
-    # Инструменты
+    # Tools
     #
 
     def _get_tools(self, chat_id: int) -> Optional[List[Dict[str, Any]]]:
@@ -621,18 +666,19 @@ class LlmBot:
             return [t.get_specification() for t in self.tools.values()]
         return None
 
+    @check_admin
     async def toogle_tools(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
         if not self.can_handle_tools[model]:
-            await message.reply(f"Для модели {model} инструменты недоступны.")
+            await message.reply(self.localization.TOOLS_NOT_SUPPORTED_BY_MODEL.format(model=model))
             return
         current_value = self.db.are_tools_enabled(chat_id)
         self.db.set_enable_tools(chat_id, not current_value)
         if not current_value:
-            await message.reply("Инструменты включены!")
+            await message.reply(self.localization.ENABLED_TOOLS)
         else:
-            await message.reply("Инструменты выключены! Чтобы включить их назад, снова наберите /tools")
+            await message.reply(self.localization.DISABLED_TOOLS)
 
     async def _check_tools(self, messages: ChatMessages, model: str) -> Any:
         messages = copy.deepcopy(messages)
@@ -744,7 +790,7 @@ class LlmBot:
         return history
 
     #
-    # Генерация
+    # Text generation
     #
 
     async def generate(self, message: Message) -> None:
@@ -937,7 +983,7 @@ class LlmBot:
         return None
 
     #
-    # Служебные методы
+    # Auxiliary methods
     #
 
     async def save_feedback(self, callback: CallbackQuery) -> None:
@@ -984,34 +1030,6 @@ class LlmBot:
         ]
 
     @staticmethod
-    def _merge_messages(messages: ChatMessages) -> ChatMessages:
-        new_messages: ChatMessages = []
-        prev_role = None
-        for m in messages:
-            content = m["content"]
-            role = m["role"]
-            if role == prev_role and role != "tool":
-                is_current_str = isinstance(content, str)
-                is_prev_str = isinstance(new_messages[-1]["content"], str)
-                if is_current_str and is_prev_str:
-                    new_messages[-1]["content"] += "\n\n" + content
-                    continue
-            prev_role = role
-            new_messages.append(m)
-        return new_messages
-
-    @staticmethod
-    def _format_chat(messages: ChatMessages) -> ChatMessages:
-        for m in messages:
-            content = m["content"]
-            role = m["role"]
-            if role == "user" and content is None:
-                continue
-            if role == "user" and isinstance(content, str) and m["user_name"]:
-                m["content"] = "Из чата пишет {}: {}".format(m["user_name"], content)
-        return messages
-
-    @staticmethod
     def _fix_broken_tool_calls(messages: ChatMessages) -> ChatMessages:
         clean_messages: ChatMessages = []
         is_expecting_tool_answer = False
@@ -1023,27 +1041,6 @@ class LlmBot:
         if is_expecting_tool_answer:
             clean_messages = clean_messages[:-1]
         return clean_messages
-
-    def _prepare_history(self, history: ChatMessages, model: str, is_chat: bool = False) -> ChatMessages:
-        if is_chat:
-            history = self._format_chat(history)
-        assert history
-        save_keys = ("content", "role", "tool_calls", "tool_call_id", "name")
-        history = [{k: m[k] for k in save_keys if m.get(k) is not None or k == "content"} for m in history]
-        history = [m for m in history if not self._is_image_content(m["content"]) or self.can_handle_images[model]]
-        assert history
-        history = [
-            m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or self.can_handle_tools[model]
-        ]
-        assert history
-        tokens_count = self._count_tokens(history, model=model)
-        while tokens_count > self.history_max_tokens[model] and len(history) >= 3:
-            history = history[2:]
-            tokens_count = self._count_tokens(history, model=model)
-        assert history
-        history = self._merge_messages(history)
-        assert history
-        return history
 
     def _get_user_name(self, user: User) -> str:
         return str(user.full_name) if user.full_name else str(user.username)
