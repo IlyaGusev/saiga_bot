@@ -131,6 +131,26 @@ async function handleRequest(request) {
         })
         continue;
       }
+      if (m.role == "user" && Array.isArray(m.content)) {
+        let fixed_parts = []
+        for (var part of m.content) {
+          if (part.type == "image_url") {
+            const image_url = part.image_url.url;
+            const base64 = image_url.replace("image/jpeg;base64,", "").replace("data:", "");
+            fixed_parts.unshift({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/jpeg",
+                data: base64
+              }
+            })
+          } else {
+            fixed_parts.push(part)
+          }
+        }
+        m.content = fixed_parts;
+      }
       newMessages.push(m)
     }
     messages = newMessages;

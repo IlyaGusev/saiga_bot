@@ -19,7 +19,7 @@ class SearchTool(Tool):
             context = "\n\n".join(snippets)
         except Exception:
             print(traceback.format_exc())
-            context = ""
+            context = "Search failed"
         return context
 
     def get_specification(self) -> Dict[str, Any]:

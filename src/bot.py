@@ -730,7 +730,7 @@ class LlmBot:
                 except Exception as e:
                     function_response = f"Tool call error: {str(e)}"
 
-            assert function_response
+            assert function_response is not None
             history.append(
                 {
                     "tool_call_id": tool_call.id,
