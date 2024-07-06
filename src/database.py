@@ -232,12 +232,11 @@ class Database:
         with self.Session() as session:
             return session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).first()
 
-    def get_system_prompt(self, user_id: int, default_prompts: Dict[str, str]) -> str:
-        current_model = self.get_current_model(user_id)
+    def get_system_prompt(self, user_id: int) -> Optional[str]:
         params = self.get_current_model_parameters(user_id)
         if params and params.prompt is not None:
             return params.prompt
-        return default_prompts.get(current_model, "")
+        return None
 
     def set_system_prompt(self, user_id: int, text: str) -> None:
         current_model = self.get_current_model(user_id)
@@ -263,10 +262,13 @@ class Database:
                 session.add(ModelParameters(user_id=user_id, model=current_model, short_name=text))
             session.commit()
 
-    def set_parameters(self, user_id: int, default_params: Dict[str, Any], **kwargs: Any) -> None:
+    def set_parameters(self, user_id: int, **kwargs: Any) -> None:
         current_model = self.get_current_model(user_id)
-        generation_parameters = self.get_parameters(user_id, default_params)
-        generation_parameters.update(kwargs)
+        generation_parameters = self.get_parameters(user_id)
+        if generation_parameters is not None:
+            generation_parameters.update(kwargs)
+        else:
+            generation_parameters = kwargs
         with self.Session() as session:
             params = session.query(ModelParameters).filter_by(user_id=user_id, model=current_model).first()
             if params:
@@ -277,13 +279,12 @@ class Database:
                 )
             session.commit()
 
-    def get_parameters(self, user_id: int, default_params: Dict[str, Any]) -> Dict[str, Any]:
-        current_model = self.get_current_model(user_id)
+    def get_parameters(self, user_id: int) -> Optional[Dict[str, Any]]:
         params = self.get_current_model_parameters(user_id)
         if params and params.generation_parameters and params.generation_parameters != "null":
             parsed_params: Dict[str, Any] = json.loads(params.generation_parameters)
             return parsed_params
-        return copy.deepcopy(default_params.get(current_model, DEFAULT_PARAMS))
+        return None
 
     def are_tools_enabled(self, user_id: int) -> bool:
         params = self.get_current_model_parameters(user_id)

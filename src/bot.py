@@ -4,9 +4,8 @@ import json
 import copy
 import traceback
 import base64
-from functools import wraps
 from email.utils import parseaddr
-from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine
+from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine, Tuple
 
 import fire  # type: ignore
 import tiktoken
@@ -29,22 +28,17 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openai import AsyncOpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
-from transformers import AutoTokenizer  # type: ignore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
+from src.provider import LLMProvider
+from src.decorators import check_admin
 from src.localization import Localization
 from src.tools import Tool
 from src.database import Database
 from src.payments import YookassaHandler, YookassaStatus
+from src.tokenizers import Tokenizers
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-
-DEFAULT_HISTORY_MAX_TOKENS = 6144
-DEFAULT_MESSAGE_COUNT_LIMIT = {
-    "standard": {"limit": 1000, "interval": 86400},
-    "subscribed": {"limit": 1000, "interval": 86400},
-}
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
 TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 DALLE_DAILY_LIMIT = 5
@@ -60,91 +54,26 @@ ChatMessage = Dict[str, Any]
 ChatMessages = List[ChatMessage]
 
 
-class Tokenizer:
-    tokenizers: Dict[str, AutoTokenizer] = dict()
-
-    @classmethod
-    def get(cls, model_name: str) -> AutoTokenizer:
-        if model_name not in cls.tokenizers:
-            cls.tokenizers[model_name] = AutoTokenizer.from_pretrained(model_name)
-        return cls.tokenizers[model_name]
-
-
-def check_admin(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Coroutine[Any, Any, Any]]:
-    @wraps(func)
-    async def wrapped(self: Any, obj: Union[CallbackQuery, Message], *args: Any, **kwargs: Any) -> Any:
-        if isinstance(obj, CallbackQuery):
-            assert obj.message
-            assert obj.from_user
-            chat_id = obj.message.chat.id
-            user_id = obj.from_user.id
-            user = obj.from_user
-        elif isinstance(obj, Message):
-            assert obj.chat
-            assert obj.from_user
-            chat_id = obj.chat.id
-            user_id = obj.from_user.id
-            user = obj.from_user
-        else:
-            assert False
-        assert user
-
-        if chat_id != user_id:
-            username = self._get_user_name(user)
-            is_admin = await self._is_admin(user_id=user_id, chat_id=chat_id)
-            if not is_admin:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=self.localization.ADMINS_ONLY.format(username=username),
-                )
-                return
-        return await func(self, obj, *args, **kwargs)
-
-    return wrapped
-
-
 class LlmBot:
     def __init__(
         self,
         bot_token: str,
-        client_config_path: str,
+        providers_config_path: str,
         db_path: str,
         localization_config_path: str,
-        chunk_size: Optional[int],
+        output_chunk_size: Optional[int],
         characters_path: Optional[str],
         tools_config_path: Optional[str],
         yookassa_config_path: Optional[str],
     ):
-        # Providers
-        with open(client_config_path) as r:
-            client_config = json.load(r)
-        self.clients = dict()
-        self.model_names = dict()
-        self.can_handle_images = dict()
-        self.can_handle_tools = dict()
-        self.default_prompts = dict()
-        self.default_params = dict()
-        self.history_max_tokens = dict()
-        self.limits = dict()
-        for model_name, config in client_config.items():
-            self.model_names[model_name] = config.pop("model_name")
-            self.can_handle_images[model_name] = config.pop("can_handle_images", False)
-            self.can_handle_tools[model_name] = config.pop("can_handle_tools", False)
-            self.default_prompts[model_name] = config.pop("system_prompt", "")
-            self.history_max_tokens[model_name] = config.pop("history_max_tokens", DEFAULT_HISTORY_MAX_TOKENS)
-            if "params" in config:
-                self.default_params[model_name] = config.pop("params")
-            self.limits[model_name] = config.pop("message_count_limit", DEFAULT_MESSAGE_COUNT_LIMIT)
-            assert "standard" in self.limits[model_name]
-            assert "subscribed" in self.limits[model_name]
-            self.clients[model_name] = AsyncOpenAI(**config)
-        assert self.clients
-        assert self.model_names
-        assert self.default_prompts
+        self.providers: Dict[str, LLMProvider] = dict()
+        with open(providers_config_path) as r:
+            providers_config = json.load(r)
+            for provider_name, config in providers_config.items():
+                self.providers[provider_name] = LLMProvider(provider_name=provider_name, **config)
 
         self.localization = Localization.load(localization_config_path, "ru")
 
-        # Tools
         self.tools: Dict[str, Tool] = dict()
         if tools_config_path:
             assert os.path.exists(tools_config_path)
@@ -153,21 +82,17 @@ class LlmBot:
                 for tool_name, tool_config in tools_config.items():
                     self.tools[tool_name] = Tool.by_name(tool_name)(**tool_config)
 
-        # Characters
         self.characters = dict()
         if characters_path and os.path.exists(characters_path):
             with open(characters_path) as r:
                 self.characters = json.load(r)
 
-        # Output parameters
-        self.chunk_size = chunk_size
+        self.output_chunk_size = output_chunk_size
 
-        # Database
         self.db = Database(db_path)
 
-        # Keyboards
         self.models_kb = InlineKeyboardBuilder()
-        for model_id in self.clients.keys():
+        for model_id in self.providers.keys():
             self.models_kb.row(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
         self.models_kb.adjust(2)
 
@@ -191,44 +116,51 @@ class LlmBot:
         self.buy_kb = InlineKeyboardBuilder()
         self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WITH_STARS, callback_data="buy:stars"))
 
-        # Bot events
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
         self.bot_info: Optional[User] = None
+
         self.dp = Dispatcher()
-        self.dp.message.register(self.start, Command("start"))
-        self.dp.message.register(self.start, Command("help"))
-        self.dp.message.register(self.reset, Command("reset"))
-        self.dp.message.register(self.set_system, Command("setsystem"))
-        self.dp.message.register(self.get_system, Command("getsystem"))
-        self.dp.message.register(self.reset_system, Command("resetsystem"))
-        self.dp.message.register(self.set_model, Command("setmodel"))
-        self.dp.message.register(self.get_model, Command("getmodel"))
-        self.dp.message.register(self.set_short_name, Command("setshortname"))
-        self.dp.message.register(self.get_short_name, Command("getshortname"))
-        self.dp.message.register(self.set_character, Command("setcharacter"))
-        self.dp.message.register(self.get_count, Command("getcount"))
-        self.dp.message.register(self.get_params, Command("getparams"))
-        self.dp.message.register(self.set_temperature, Command("settemperature"))
-        self.dp.message.register(self.set_top_p, Command("settopp"))
-        self.dp.message.register(self.set_email, Command("setemail"))
-        self.dp.message.register(self.sub_info, Command("subinfo"))
-        self.dp.message.register(self.sub_buy, Command("subbuy"))
-        self.dp.message.register(self.toogle_tools, Command("tools"))
-        self.dp.message.register(self.history, Command("history"))
+        commands: List[Tuple[str, Callable[..., Any]]] = [
+            ("start", self.start),
+            ("help", self.start),
+            ("reset", self.reset),
+            ("setsystem", self.set_system),
+            ("getsystem", self.get_system),
+            ("resetsystem", self.reset_system),
+            ("setmodel", self.set_model),
+            ("getmodel", self.get_model),
+            ("setshortname", self.set_short_name),
+            ("getshortname", self.get_short_name),
+            ("setcharacter", self.set_character),
+            ("getcount", self.get_count),
+            ("getparams", self.get_params),
+            ("settemperature", self.set_temperature),
+            ("settopp", self.set_top_p),
+            ("setemail", self.set_email),
+            ("subinfo", self.sub_info),
+            ("subbuy", self.sub_buy),
+            ("tools", self.toogle_tools),
+            ("history", self.history),
+        ]
+        for command, func in commands:
+            self.dp.message.register(func, Command(command))
         self.dp.message.register(
-            self.successful_payment_handler, lambda message: message.content_type == ContentType.SUCCESSFUL_PAYMENT
+            self.successful_payment_handler, lambda m: m.content_type == ContentType.SUCCESSFUL_PAYMENT
         )
         self.dp.message.register(self.generate)
 
-        self.dp.callback_query.register(self.save_feedback, F.data.startswith("feedback:"))
-        self.dp.callback_query.register(self.set_model_button_handler, F.data.startswith("setmodel:"))
-        self.dp.callback_query.register(self.set_character_button_handler, F.data.startswith("setcharacter:"))
-        self.dp.callback_query.register(self.set_temperature_button_handler, F.data.startswith("settemperature:"))
-        self.dp.callback_query.register(self.set_top_p_button_handler, F.data.startswith("settopp:"))
-        self.dp.callback_query.register(self.yookassa_sub_buy_proceed, F.data.startswith("buy:yookassa"))
-        self.dp.callback_query.register(self.stars_sub_buy_proceed, F.data.startswith("buy:stars"))
+        callbacks: List[Tuple[str, Callable[..., Any]]] = [
+            ("feedback:", self.save_feedback_handler),
+            ("setmodel:", self.set_model_button_handler),
+            ("setcharacter:", self.set_character_button_handler),
+            ("settemperature:", self.set_temperature_button_handler),
+            ("settopp:", self.set_top_p_button_handler),
+            ("buy:yookassa", self.yookassa_sub_buy_proceed),
+            ("buy:stars", self.stars_sub_buy_proceed),
+        ]
+        for start, func in callbacks:
+            self.dp.callback_query.register(func, F.data.startswith(start))
 
-        # Payments
         self.dp.pre_checkout_query.register(self.pre_checkout_handler)
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.yookassa: Optional[YookassaHandler] = None
@@ -254,7 +186,8 @@ class LlmBot:
         model = self.db.get_current_model(chat_id)
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         mode = "standard" if self.db.get_subscription_info(user_id) <= 0 else "subscribed"
-        sub_limits = self.localization.LIMITS.render(limits=self.limits, mode=mode).strip()
+        limits = {name: provider.limits for name, provider in self.providers.items()}
+        sub_limits = self.localization.LIMITS.render(limits=limits, mode=mode).strip()
         content = self.localization.HELP.render(
             model=model, message_count=remaining_count, sub_limits=sub_limits, admin_username=ADMIN_USERNAME
         )
@@ -276,11 +209,12 @@ class LlmBot:
         conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
         model = self.db.get_current_model(chat_id)
+        provider = self.providers[model]
         message_text = self.localization.NO_HISTORY
         if history:
             history = self._replace_images(history)
-            history = self._prepare_history(history, model=model, is_chat=is_chat)
-            tokens_count = self._count_tokens(history, model=model)
+            history = self._prepare_history(history, provider, is_chat)
+            tokens_count = self._count_tokens(history, provider)
             plain_history = json.dumps(history, ensure_ascii=False)
             plain_history = self._truncate_text(plain_history)
             message_text = self.localization.HISTORY.format(tokens_count=tokens_count, history=plain_history)
@@ -307,22 +241,22 @@ class LlmBot:
                 m["content"] = "Из чата пишет {}: {}".format(m["user_name"], content)
         return messages
 
-    def _prepare_history(self, history: ChatMessages, model: str, is_chat: bool = False) -> ChatMessages:
+    def _prepare_history(self, history: ChatMessages, provider: LLMProvider, is_chat: bool = False) -> ChatMessages:
         if is_chat:
             history = self._format_chat(history)
         assert history
         save_keys = ("content", "role", "tool_calls", "tool_call_id", "name")
         history = [{k: m[k] for k in save_keys if m.get(k) is not None or k == "content"} for m in history]
-        history = [m for m in history if not self._is_image_content(m["content"]) or self.can_handle_images[model]]
+        history = [m for m in history if not self._is_image_content(m["content"]) or provider.can_handle_images]
         assert history
         history = [
-            m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or self.can_handle_tools[model]
+            m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or provider.can_handle_tools
         ]
         assert history
-        tokens_count = self._count_tokens(history, model=model)
-        while tokens_count > self.history_max_tokens[model] and len(history) >= 3:
+        tokens_count = self._count_tokens(history, provider)
+        while tokens_count > provider.history_max_tokens and len(history) >= 3:
             history = history[2:]
-            tokens_count = self._count_tokens(history, model=model)
+            tokens_count = self._count_tokens(history, provider)
         assert history
         history = self._merge_messages(history)
         assert history
@@ -359,7 +293,7 @@ class LlmBot:
         assert callback.data
         chat_id = callback.message.chat.id
         model_name = callback.data.split(":")[1]
-        assert model_name in self.clients
+        assert model_name in self.providers
         self.db.set_current_model(chat_id, model_name)
         self.db.create_conv_id(chat_id)
         assert isinstance(callback.message, Message)
@@ -382,11 +316,17 @@ class LlmBot:
         self.db.set_system_prompt(chat_id, text)
         self.db.create_conv_id(chat_id)
         text = self._truncate_text(text)
-        await message.reply(self.localization.NEW_SYSTEM_PROMPT.format(system_prompt=text))
+        if text.strip():
+            await message.reply(self.localization.NEW_SYSTEM_PROMPT.format(system_prompt=text))
+        else:
+            await message.reply(self.localization.EMPTY_SYSTEM_PROMPT)
 
     async def get_system(self, message: Message) -> None:
         chat_id = message.chat.id
-        prompt = self.db.get_system_prompt(chat_id, self.default_prompts)
+        model = self.db.get_current_model(chat_id)
+        prompt = self.db.get_system_prompt(chat_id)
+        if prompt is None:
+            prompt = self.providers[model].system_prompt
         if not prompt.strip():
             prompt = self.localization.EMPTY_SYSTEM_PROMPT
         await message.reply(prompt)
@@ -394,7 +334,7 @@ class LlmBot:
     async def reset_system(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
-        self.db.set_system_prompt(chat_id, self.default_prompts.get(model, ""))
+        self.db.set_system_prompt(chat_id, self.providers[model].system_prompt)
         self.db.create_conv_id(chat_id)
         await message.reply(self.localization.RESET_SYSTEM_PROMPT)
 
@@ -454,8 +394,9 @@ class LlmBot:
     def _count_remaining_messages(self, user_id: int, model: str) -> int:
         is_subscribed = self.db.is_subscribed_user(user_id)
         mode = "standard" if not is_subscribed else "subscribed"
-        limit = int(self.limits[model][mode]["limit"])
-        interval = self.limits[model][mode]["interval"]
+        provider = self.providers[model]
+        limit = int(provider.limits[mode]["limit"])
+        interval = provider.limits[mode]["interval"]
         count = int(self.db.count_user_messages(user_id, model, interval))
         remaining_count = limit - count
         return max(0, remaining_count)
@@ -496,7 +437,8 @@ class LlmBot:
             await message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
-        sub_limits = self.localization.LIMITS.render(limits=self.limits, mode="subscribed").strip()
+        limits = {name: provider.limits for name, provider in self.providers.items()}
+        sub_limits = self.localization.LIMITS.render(limits=limits, mode="subscribed").strip()
         description = self.localization.SUB_DESCRIPTION.render(sub_limits=sub_limits, price=SUB_PRICE_RUB)
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
@@ -632,8 +574,13 @@ class LlmBot:
         assert callback.message
         assert callback.data
         chat_id = callback.message.chat.id
+        model = self.db.get_current_model(chat_id)
+        provider = self.providers[model]
         temperature = float(callback.data.split(":")[1])
-        self.db.set_parameters(chat_id, self.default_params, temperature=temperature)
+        params = self.db.get_parameters(chat_id)
+        params = provider.params if params is None else params
+        params["temperature"] = temperature
+        self.db.set_parameters(chat_id, **params)
         assert isinstance(callback.message, Message)
         await callback.message.edit_text(self.localization.NEW_TEMPERATURE.format(temperature=temperature))
 
@@ -646,14 +593,22 @@ class LlmBot:
         assert callback.message
         assert callback.data
         chat_id = callback.message.chat.id
+        model = self.db.get_current_model(chat_id)
+        provider = self.providers[model]
         top_p = float(callback.data.split(":")[1])
-        self.db.set_parameters(chat_id, self.default_params, top_p=top_p)
+        params = self.db.get_parameters(chat_id)
+        params = provider.params if params is None else params
+        params["top_p"] = top_p
+        self.db.set_parameters(chat_id, **params)
         assert isinstance(callback.message, Message)
         await callback.message.edit_text(self.localization.NEW_TOP_P.format(top_p=top_p))
 
     async def get_params(self, message: Message) -> None:
         chat_id = message.chat.id
-        params = self.db.get_parameters(chat_id, self.default_params)
+        model = self.db.get_current_model(chat_id)
+        provider = self.providers[model]
+        params = self.db.get_parameters(chat_id)
+        params = provider.params if params is None else params
         params_str = json.dumps(params)
         await message.reply(self.localization.CURRENT_PARAMS.format(params=params_str))
 
@@ -663,7 +618,8 @@ class LlmBot:
 
     def _get_tools(self, chat_id: int) -> Optional[List[Dict[str, Any]]]:
         model = self.db.get_current_model(chat_id)
-        if self.can_handle_tools[model] and self.tools and self.db.are_tools_enabled(chat_id):
+        provider = self.providers[model]
+        if provider.can_handle_tools and self.tools and self.db.are_tools_enabled(chat_id):
             return [t.get_specification() for t in self.tools.values()]
         return None
 
@@ -671,7 +627,8 @@ class LlmBot:
     async def toogle_tools(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
-        if not self.can_handle_tools[model]:
+        provider = self.providers[model]
+        if not provider.can_handle_tools:
             await message.reply(self.localization.TOOLS_NOT_SUPPORTED_BY_MODEL.format(model=model))
             return
         current_value = self.db.are_tools_enabled(chat_id)
@@ -688,8 +645,8 @@ class LlmBot:
         tools = [t.get_specification() for t in self.tools.values()]
         casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
         casted_tools = [cast(ChatCompletionToolParam, tool) for tool in tools]
-        chat_completion = await self.clients[model].chat.completions.create(
-            model=self.model_names[model],
+        chat_completion = await self.providers[model].api.chat.completions.create(
+            model=self.providers[model].model_name,
             messages=casted_messages,
             tools=casted_tools,
             tool_choice="auto",
@@ -819,9 +776,10 @@ class LlmBot:
                 return
 
         model = self.db.get_current_model(chat_id)
-        if model not in self.clients:
+        if model not in self.providers:
             await message.reply(self.localization.MODEL_NOT_SUPPORTED)
             return
+        provider = self.providers[model]
 
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         print(user_id, model, remaining_count)
@@ -829,18 +787,20 @@ class LlmBot:
             await message.reply(self.localization.LIMIT_EXCEEDED.format(model=model))
             return
 
-        params = self.db.get_parameters(chat_id, self.default_params)
-        assert params
+        params = self.db.get_parameters(chat_id)
+        params = provider.params if params is None else params
         if "claude" in model and params["temperature"] > 1.0:
             await message.reply(self.localization.CLAUDE_HIGH_TEMPERATURE)
             return
 
         conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
-        system_prompt = self.db.get_system_prompt(chat_id, self.default_prompts)
+        system_prompt = self.db.get_system_prompt(chat_id)
+        if system_prompt is None:
+            system_prompt = provider.system_prompt
 
         content = await self._build_content(message)
-        if not isinstance(content, str) and not self.can_handle_images[model]:
+        if not isinstance(content, str) and not provider.can_handle_images:
             await message.reply(self.localization.CONTENT_NOT_SUPPORTED_BY_MODEL)
             return
         if content is None:
@@ -850,7 +810,7 @@ class LlmBot:
         self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
 
         history = history + [{"role": "user", "content": content, "user_name": user_name}]
-        history = self._prepare_history(history, model=model, is_chat=is_chat)
+        history = self._prepare_history(history, provider, is_chat)
 
         placeholder = await message.reply("💬")
 
@@ -875,9 +835,9 @@ class LlmBot:
                 params["tools"] = tools
             answer = await self._query_api(model=model, messages=history, system_prompt=system_prompt, **params)
 
-            chunk_size = self.chunk_size
-            if chunk_size is not None:
-                answer_parts = [answer[i : i + chunk_size] for i in range(0, len(answer), chunk_size)]
+            output_chunk_size = self.output_chunk_size
+            if output_chunk_size is not None:
+                answer_parts = [answer[i : i + output_chunk_size] for i in range(0, len(answer), output_chunk_size)]
             else:
                 answer_parts = [answer]
 
@@ -920,8 +880,9 @@ class LlmBot:
             self._crop_content(messages[-1]["content"]),
         )
         casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
-        chat_completion = await self.clients[model].chat.completions.create(
-            model=self.model_names[model], messages=casted_messages, **kwargs
+        provider = self.providers[model]
+        chat_completion = await provider.api.chat.completions.create(
+            model=provider.model_name, messages=casted_messages, **kwargs
         )
         assert chat_completion.choices, str(chat_completion)
         assert chat_completion.choices[0].message.content, str(chat_completion)
@@ -988,7 +949,7 @@ class LlmBot:
     # Auxiliary methods
     #
 
-    async def save_feedback(self, callback: CallbackQuery) -> None:
+    async def save_feedback_handler(self, callback: CallbackQuery) -> None:
         assert callback.from_user
         assert callback.message
         assert callback.data
@@ -1000,12 +961,13 @@ class LlmBot:
             chat_id=callback.message.chat.id, message_id=message_id, reply_markup=None
         )
 
-    def _count_tokens(self, messages: ChatMessages, model: str) -> int:
-        url = str(self.clients[model].base_url)
+    def _count_tokens(self, messages: ChatMessages, provider: LLMProvider) -> int:
+        model_name = provider.model_name
+        url = str(provider.api.base_url)
         tokens_count = 0
 
         if "api.openai.com" in url:
-            encoding = tiktoken.encoding_for_model(self.model_names[model])
+            encoding = tiktoken.encoding_for_model(model_name)
             for m in messages:
                 if isinstance(m["content"], str):
                     tokens_count += len(encoding.encode(m["content"]))
@@ -1019,7 +981,7 @@ class LlmBot:
                     tokens_count += len(m["content"]) // 2
             return tokens_count
 
-        tokenizer = Tokenizer.get(self.model_names[model])
+        tokenizer = Tokenizers.get(model_name)
         tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         tokens_count = len(tokens)
         return tokens_count
@@ -1072,26 +1034,26 @@ class LlmBot:
         return messages
 
     def _truncate_text(self, text: str) -> str:
-        if self.chunk_size and len(text) > self.chunk_size:
-            text = text[: self.chunk_size] + "... truncated"
+        if self.output_chunk_size and len(text) > self.output_chunk_size:
+            text = text[: self.output_chunk_size] + "... truncated"
         return text
 
 
 def main(
     bot_token: str,
-    client_config_path: str,
+    providers_config_path: str,
     db_path: str,
     localization_config_path: str,
-    chunk_size: Optional[int] = 3500,
+    output_chunk_size: Optional[int] = 3500,
     characters_path: Optional[str] = None,
     tools_config_path: Optional[str] = None,
     yookassa_config_path: Optional[str] = None,
 ) -> None:
     bot = LlmBot(
         bot_token=bot_token,
-        client_config_path=client_config_path,
+        providers_config_path=providers_config_path,
         db_path=db_path,
-        chunk_size=chunk_size,
+        output_chunk_size=output_chunk_size,
         characters_path=characters_path,
         tools_config_path=tools_config_path,
         yookassa_config_path=yookassa_config_path,
