@@ -60,6 +60,12 @@ class Localization:
     FILLED_EMAIL: str
     ADMINS_ONLY: str
     PAYMENT_URL: str
+    PAYMENT_CANCEL: str
+    DALLE_LIMIT: str
+    DALLE_PROMPT: str
+    DALLE_ERROR: str
+    BUY_WITH_STARS: str
+    BUY_WITH_RUB: str
 
     @classmethod
     def load(cls, path: str, language: str) -> "Localization":

@@ -39,6 +39,12 @@
         "FILLED_EMAIL": "Спасибо! Адрес задан: {email}",
         "ADMINS_ONLY": "{username}, только админы могут это делать",
         "PAYMENT_URL": "Ссылка для оплаты: {url}",
+        "PAYMENT_CANCEL": "Платёж отменён!",
+        "DALLE_LIMIT": "Лимит по генерации картинок исчерпан, восстановится через 24 часа",
+        "DALLE_PROMPT": "Генерирую картинку по промпту: {displayed_prompt}",
+        "DALLE_ERROR": "Ошибка при вызове DALL-E: {error}",
+        "BUY_WITH_STARS": "Купить (за Telegram Stars)",
+        "BUY_WITH_RUB": "Купить (за рубли)",
         "HELP": {
             "template_name": "ru_help"
         },

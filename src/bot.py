@@ -50,6 +50,7 @@ TOP_P_RANGE = (0.8, 0.9, 0.95, 0.98, 1.0)
 DALLE_DAILY_LIMIT = 5
 ADMIN_USERNAME = "YallenGusev"
 IMAGE_PLACEHOLDER = "<image_placeholder>"
+TIMEZONE = "Europe/Moscow"
 
 SUB_PRICE_RUB = 500
 SUB_PRICE_STARS = 250
@@ -188,7 +189,7 @@ class LlmBot:
             self.top_p_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settopp:{value}"))
 
         self.buy_kb = InlineKeyboardBuilder()
-        self.buy_kb.add(InlineKeyboardButton(text="Купить (за Telegram Stars)", callback_data="buy:stars"))
+        self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WITH_STARS, callback_data="buy:stars"))
 
         # Bot events
         self.bot = Bot(token=bot_token, default=DefaultBotProperties(parse_mode=None))
@@ -232,13 +233,13 @@ class LlmBot:
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.yookassa: Optional[YookassaHandler] = None
         if yookassa_config_path and os.path.exists(yookassa_config_path):
-            self.buy_kb.add(InlineKeyboardButton(text="Купить (за рубли)", callback_data="buy:yookassa"))
+            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WITH_RUB, callback_data="buy:yookassa"))
             with open(yookassa_config_path) as r:
                 config = json.load(r)
                 self.yookassa = YookassaHandler(**config)
 
     async def start_polling(self) -> None:
-        self.scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+        self.scheduler = AsyncIOScheduler(timezone=TIMEZONE)
         if self.yookassa is not None:
             self.scheduler.add_job(self.yookassa_check_payments, trigger="interval", seconds=30)
         self.scheduler.start()
@@ -604,7 +605,7 @@ class LlmBot:
                 await self.bot.send_message(chat_id=payment.chat_id, text=self.localization.SUB_SUCCESS)
                 self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
             elif status == YookassaStatus.CANCELED:
-                await self.bot.send_message(chat_id=payment.chat_id, text="Платёж отменён!")
+                await self.bot.send_message(chat_id=payment.chat_id, text=self.localization.PAYMENT_CANCEL)
                 self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
 
     async def set_email(self, message: Message) -> None:
@@ -701,13 +702,14 @@ class LlmBot:
         dalle_count = self.db.count_generated_images(user_id, 86400)
         is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
         if not is_dalle_remaining:
-            await placeholder.edit_text("Лимит по генерации картинок исчерпан, восстановится через 24 часа")
+            await placeholder.edit_text(self.localization.DALLE_LIMIT)
             return
 
-        await placeholder.edit_text(f"Генерирую картинку по промпту: {kwargs['prompt_russian']}")
+        displayed_prompt = kwargs["prompt_russian"]
+        await placeholder.edit_text(self.localization.DALLE_PROMPT.format(displayed_prompt=displayed_prompt))
         function_response = await self.tools["dalle"](**kwargs)
         if not isinstance(function_response, list) or "image_url" not in function_response[1]:
-            text = f"Ошибка при вызове DALL-E: {function_response}"
+            text = self.localization.DALLE_ERROR.format(error=function_response)
             new_message = await self.bot.send_message(
                 chat_id=chat_id, reply_to_message_id=placeholder.message_id, text=text
             )
@@ -757,7 +759,7 @@ class LlmBot:
                 function_args = json.loads(tool_call.function.arguments)
             except json.decoder.JSONDecodeError:
                 function_response = "No response from the tool, try again"
-                print(f"Bad tool answer: {tool_call.function.arguments}")
+                print(f"Malformed tool arguments: {tool_call.function.arguments}")
 
             if function_response is None and function_name == "dalle":
                 await self._call_dalle(
@@ -769,7 +771,7 @@ class LlmBot:
                 try:
                     function_response = await function_to_call(**function_args)
                 except Exception as e:
-                    function_response = f"Ошибка при вызове инструмента: {str(e)}"
+                    function_response = f"Tool call error: {str(e)}"
 
             assert function_response
             history.append(

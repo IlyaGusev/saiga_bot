@@ -1,4 +1,36 @@
 {
+    "saiga-aya-23-35b-awq": {
+        "base_url": "",
+        "api_key": "",
+        "model_name": "IlyaGusev/saiga_aya_23_35b_sft_m1_d5_awq_4bit",
+        "system_prompt": "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
+    },
+    "saiga-phi3-medium-kto": {
+        "base_url": "",
+        "api_key": "",
+        "model_name": "IlyaGusev/saiga_phi3_medium_sft_m1_d2_kto_m5_d7",
+        "system_prompt": "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им.",
+        "history_max_tokens": 3072,
+        "params": {
+            "temperature": 0.6,
+            "top_p": 0.9,
+            "max_tokens": 1024
+        }
+    },
+    "saiga-70b-abl-kto-awq": {
+        "base_url": "",
+        "api_key": "",
+        "model_name": "IlyaGusev/saiga_llama3_70b_sft_m1_d5_abliterated_kto_m1_d2_awq_4bit",
+        "system_prompt": "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им.",
+        "history_max_tokens": 3072
+    },
+    "saiga-70b-abl-awq": {
+        "base_url": "",
+        "api_key": "",
+        "model_name": "IlyaGusev/saiga_llama3_70b_sft_m1_d5_abliterated_awq_4bit",
+        "system_prompt": "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им.",
+        "history_max_tokens": 3072
+    },
     "saiga-v5": {
         "base_url": "",
         "api_key": "",
@@ -11,11 +43,11 @@
         "model_name": "IlyaGusev/saiga_llama3_8b",
         "system_prompt": "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
     },
-    "suzume": {
+    "saiga-v7": {
         "base_url": "",
         "api_key": "",
-        "model_name": "lightblue/suzume-llama-3-8B-multilingual",
-        "system_prompt": "Ты — Suzume, языковая модель, разработанная Lightblue"
+        "model_name": "IlyaGusev/saiga_llama3_8b",
+        "system_prompt": "Ты — Сайга, русскоязычный автоматический ассистент. Ты разговариваешь с людьми и помогаешь им."
     },
     "sfr": {
         "base_url": "",
@@ -23,13 +55,13 @@
         "model_name": "RLHFlow/LLaMA3-iterative-DPO-final",
         "system_prompt": "Ты — LLaMA3-iterative-DPO-final, языковая модель, разработанная Salesforce."
     },
-    "vikhr-it-5": {
+    "vikhr-5.3": {
         "base_url": "",
         "api_key": "",
-        "model_name": "Vikhrmodels/it-5.2-fp16-cp",
+        "model_name": "Vikhrmodels/it-5.3-fp16-32k",
         "system_prompt": "",
         "params": {
-            "temperature": 0.6,
+            "temperature": 0.8,
             "top_p": 0.9,
             "stop": "<|im_end|>",
             "max_tokens": 1536
@@ -41,14 +73,15 @@
         "model_name": "gpt-4o",
         "can_handle_images": true,
         "can_handle_tools": true,
+        "history_max_tokens": 32000,
         "system_prompt": "Ты - gpt-4o, новейшая языковая модель, разработанная OpenAI",
         "message_count_limit": {
             "standard": {
-                "limit": 20,
+                "limit": 10,
                 "interval": 86400
             },
             "subscribed": {
-                "limit": 100,
+                "limit": 50,
                 "interval": 86400
             }
         }
@@ -73,42 +106,45 @@
         "base_url": "",
         "api_key": "",
         "model_name": "claude-3-opus-20240229",
+        "history_max_tokens": 30000,
         "system_prompt": "Ты — Claude Opus, языковая модель, разработанная Anthropic.",
         "message_count_limit": {
             "standard": {
-                "limit": 5,
-                "interval": 86400
+                "limit": 6,
+                "interval": 172800
             },
             "subscribed": {
-                "limit": 25,
-                "interval": 86400
+                "limit": 30,
+                "interval": 172800
             }
         },
         "params": {
-            "temperature": 0.6,
-            "top_p": 0.9,
-            "max_tokens": 512
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 1024
         }
     },
-    "claude-sonnet": {
+    "claude-3-5-sonnet": {
         "base_url": "",
         "api_key": "",
-        "model_name": "claude-3-sonnet-20240229",
-        "system_prompt": "Ты — Claude Sonnet, языковая модель, разработанная Anthropic.",
+        "model_name": "claude-3-5-sonnet-20240620",
+        "system_prompt": "Ты — Claude 3.5 Sonnet, последняя языковая модель, разработанная Anthropic.",
+        "can_handle_tools": true,
+        "history_max_tokens": 32000,
         "message_count_limit": {
             "standard": {
                 "limit": 20,
-                "interval": 86400
+                "interval": 172800
             },
             "subscribed": {
                 "limit": 100,
-                "interval": 86400
+                "interval": 172800
             }
         },
         "params": {
-            "temperature": 0.8,
+            "temperature": 1.0,
             "top_p": 0.9,
-            "max_tokens": 512
+            "max_tokens": 1024
         }
     },
     "claude-haiku": {
@@ -127,9 +163,9 @@
             }
         },
         "params": {
-            "temperature": 0.8,
+            "temperature": 1.0,
             "top_p": 0.9,
-            "max_tokens": 512
+            "max_tokens": 1024
         }
     }
 }
