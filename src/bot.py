@@ -185,10 +185,14 @@ class LlmBot:
 
     async def start(self, message: Message) -> None:
         assert message.from_user
-        user_id = message.from_user.id
         chat_id = message.chat.id
-        self.db.create_conv_id(chat_id)
         model = self.db.get_current_model(chat_id)
+        if model not in self.providers:
+            await message.reply(self.localization.MODEL_NOT_SUPPORTED)
+            return
+
+        self.db.create_conv_id(chat_id)
+        user_id = message.from_user.id
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         mode = "standard" if self.db.get_subscription_info(user_id) <= 0 else "subscribed"
         limits = {name: provider.limits for name, provider in self.providers.items()}
