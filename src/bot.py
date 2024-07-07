@@ -4,8 +4,9 @@ import json
 import copy
 import traceback
 import base64
+import io
 from email.utils import parseaddr
-from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine, Tuple
+from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine, Tuple, BinaryIO
 
 import fire  # type: ignore
 import tiktoken
@@ -25,6 +26,7 @@ from aiogram.types import (
     SuccessfulPayment,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramBadRequest
 from openai import AsyncOpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
@@ -37,6 +39,7 @@ from src.tools import Tool
 from src.database import Database
 from src.payments import YookassaHandler, YookassaStatus
 from src.tokenizers import Tokenizers
+from src.document_loader import DocumentLoader
 
 
 TEMPERATURE_RANGE = (0.0, 0.5, 0.8, 1.0, 1.2)
@@ -90,6 +93,8 @@ class LlmBot:
         self.output_chunk_size = output_chunk_size
 
         self.db = Database(db_path)
+
+        self.document_loader = DocumentLoader()
 
         self.models_kb = InlineKeyboardBuilder()
         for model_id in self.providers.keys():
@@ -253,12 +258,17 @@ class LlmBot:
             m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or provider.can_handle_tools
         ]
         assert history
+        history = self._merge_messages(history)
+        assert history
         tokens_count = self._count_tokens(history, provider)
         while tokens_count > provider.history_max_tokens and len(history) >= 3:
             history = history[2:]
             tokens_count = self._count_tokens(history, provider)
-        assert history
-        history = self._merge_messages(history)
+        last_message = history[-1]["content"]
+        if tokens_count > provider.history_max_tokens and isinstance(last_message, str):
+            estimated_char_count = provider.history_max_tokens * 2
+            if len(last_message) > estimated_char_count:
+                history[-1]["content"] = "<truncated text>\n\n" + last_message[-estimated_char_count:]
         assert history
         return history
 
@@ -901,17 +911,18 @@ class LlmBot:
 
     async def _build_content(self, message: Message) -> Union[None, str, List[Dict[str, Any]]]:
         content_type = message.content_type
+        chat_id = message.chat.id
+        bot_short_name = self.db.get_short_name(chat_id)
         if content_type == "text":
             assert message.text
             text = message.text
-            chat_id = message.chat.id
-            bot_short_name = self.db.get_short_name(chat_id)
             assert self.bot_info
             assert self.bot_info.username
             text = text.replace("@" + self.bot_info.username, bot_short_name).strip()
             return text
 
         photo = None
+        text_document = None
         photo_ext = (".jpg", "jpeg", ".png", ".webp", ".gif")
         if content_type == "photo":
             assert message.photo
@@ -920,17 +931,23 @@ class LlmBot:
         elif content_type == "document":
             document = message.document
             if document:
-                file_info = await self.bot.get_file(document.file_id)
+                try:
+                    file_info = await self.bot.get_file(document.file_id)
+                except TelegramBadRequest:
+                    traceback.print_exc()
+                    file_info = None
                 if file_info and file_info.file_path:
                     file_path = file_info.file_path
-                    if "." + file_path.split(".")[-1].lower() in photo_ext:
+                    file_ext = "." + file_path.split(".")[-1].lower()
+                    if file_ext in photo_ext:
                         photo = file_path
+                    if self.document_loader.is_supported(file_ext):
+                        text_document = file_path
 
         if photo:
-            file_stream = await self.bot.download_file(photo)
-            assert file_stream
-            file_stream.seek(0)
-            base64_image = base64.b64encode(file_stream.read()).decode("utf-8")
+            image_file_stream: Optional[BinaryIO] = await self.bot.download_file(photo)
+            assert image_file_stream
+            base64_image = base64.b64encode(image_file_stream.read()).decode("utf-8")
             assert base64_image
             content: List[Dict[str, Any]] = []
             if message.caption:
@@ -942,6 +959,16 @@ class LlmBot:
                 }
             )
             return content
+
+        if text_document:
+            file_stream: Optional[BinaryIO] = await self.bot.download_file(text_document)
+            assert file_stream
+            extracted_text = self.document_loader.load(file_stream, file_ext)
+            if extracted_text:
+                caption = message.caption if message.caption else ""
+                if caption:
+                    extracted_text = f"{caption}\n\n#####\n{extracted_text}\n#####\n\n{caption}"
+                return extracted_text
 
         return None
 

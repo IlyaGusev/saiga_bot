@@ -6,4 +6,5 @@ fire==0.5.0
 tiktoken==0.7.0
 yookassa==3.2.0
 apscheduler==3.6.3
+pdfminer.six==20240706
 types-requests
