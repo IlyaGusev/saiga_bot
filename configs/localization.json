@@ -45,6 +45,7 @@
         "DALLE_ERROR": "Ошибка при вызове DALL-E: {error}",
         "BUY_WITH_STARS": "Купить (за Telegram Stars)",
         "BUY_WITH_RUB": "Купить (за рубли)",
+        "WRONG_COMMAND": "Такой команды у бота нет. Если вы не пытались ввести команду, уберите '/' из начала сообщения.",
         "HELP": {
             "template_name": "ru_help"
         },

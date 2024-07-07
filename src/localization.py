@@ -66,6 +66,7 @@ class Localization:
     DALLE_ERROR: str
     BUY_WITH_STARS: str
     BUY_WITH_RUB: str
+    WRONG_COMMAND: str
 
     @classmethod
     def load(cls, path: str, language: str) -> "Localization":

@@ -149,6 +149,7 @@ class LlmBot:
         ]
         for command, func in commands:
             self.dp.message.register(func, Command(command))
+        self.dp.message.register(self.wrong_command, lambda m: m.text and m.text.startswith("/"))
         self.dp.message.register(
             self.successful_payment_handler, lambda m: m.content_type == ContentType.SUCCESSFUL_PAYMENT
         )
@@ -201,6 +202,9 @@ class LlmBot:
             model=model, message_count=remaining_count, sub_limits=sub_limits, admin_username=ADMIN_USERNAME
         )
         await message.reply(content, parse_mode=ParseMode.MARKDOWN)
+
+    async def wrong_command(self, message: Message) -> None:
+        await message.reply(self.localization.WRONG_COMMAND)
 
     #
     # History management
