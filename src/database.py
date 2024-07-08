@@ -27,13 +27,13 @@ class Message(Base):
     __tablename__ = "messages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     role: Mapped[str]
-    user_id = Mapped[Optional[int]]
+    user_id: Mapped[Optional[int]]
     user_name: Mapped[Optional[str]]
     reply_user_id: Mapped[Optional[int]]
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     conv_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     timestamp: Mapped[Optional[int]]
-    message_id = Mapped[Optional[int]]
+    message_id: Mapped[Optional[int]]
     model: Mapped[Optional[str]]
     system_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tool_calls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
