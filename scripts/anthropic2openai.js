@@ -136,12 +136,13 @@ async function handleRequest(request) {
         for (var part of m.content) {
           if (part.type == "image_url") {
             const image_url = part.image_url.url;
-            const base64 = image_url.replace("image/jpeg;base64,", "").replace("data:", "");
+            const base64 = image_url.split(",")[1].replace("data:", "");
+            const media_type = image_url.split(",")[0].split(";")[0].replace("data:", "");
             fixed_parts.unshift({
               type: "image",
               source: {
                 type: "base64",
-                media_type: "image/jpeg",
+                media_type: media_type,
                 data: base64
               }
             })

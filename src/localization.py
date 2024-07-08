@@ -59,6 +59,7 @@ class Localization:
     INCORRECT_EMAIL: str
     FILLED_EMAIL: str
     ADMINS_ONLY: str
+    CREATORS_ONLY: str
     PAYMENT_URL: str
     PAYMENT_CANCEL: str
     DALLE_LIMIT: str

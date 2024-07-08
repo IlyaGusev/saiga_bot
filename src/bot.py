@@ -35,7 +35,7 @@ from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
 from src.provider import LLMProvider
-from src.decorators import check_admin
+from src.decorators import check_admin, check_creator
 from src.localization import Localization
 from src.tools import Tool
 from src.database import Database
@@ -161,6 +161,7 @@ class LlmBot:
             ("subbuy", self.sub_buy),
             ("tools", self.toogle_tools),
             ("history", self.history),
+            ("debug", self.debug),
         ]
         for command, func in commands:
             self.dp.message.register(func, Command(command))
@@ -735,7 +736,7 @@ class LlmBot:
             )
             return
         image_url: Any = function_response[1]["image_url"]
-        base64_image = image_url["url"].replace("data:image/jpeg;base64,", "")
+        base64_image = image_url["url"].split(",")[-1]
         image_data = base64.b64decode(base64_image)
         input_file = BufferedInputFile(image_data, filename="image.jpeg")
         new_message = await self.bot.send_photo(
@@ -885,6 +886,7 @@ class LlmBot:
 
             history = self._fix_image_roles(history)
             history = self._fix_broken_tool_calls(history)
+            history = self._merge_messages(history)
             if tools and "gpt" not in model:
                 params["tools"] = tools
             answer = await self._query_api(provider=provider, messages=history, system_prompt=system_prompt, **params)
@@ -921,6 +923,25 @@ class LlmBot:
             text = self.localization.ERROR.format(admin_username=self.config.admin_user_name, chat_id=chat_id)
             await placeholder.edit_text(text)
 
+    @check_creator
+    async def debug(self, message: Message, command: CommandObject) -> None:
+        assert command.args
+        conv_id = command.args.strip()
+        user_id = self.db.get_user_id_by_conv_id(conv_id)
+        history = self.db.fetch_conversation(conv_id)
+        model = list({m["model"] for m in history if m["model"]})[0]
+        provider = self.providers[model]
+        history = self._prepare_history(history, provider, False)
+        params = self.db.get_parameters(user_id)
+        params = provider.params if params is None else params
+        system_prompt = self.db.get_system_prompt(user_id)
+        system_prompt = provider.system_prompt if system_prompt is None else system_prompt
+        placeholder = await message.reply("💬")
+        history = self._fix_image_roles(history)
+        history = self._fix_broken_tool_calls(history)
+        answer = await self._query_api(provider=provider, messages=history, system_prompt=system_prompt, **params)
+        await placeholder.edit_text(answer[: self.config.output_chunk_size])
+
     @staticmethod
     async def _query_api(provider: LLMProvider, messages: ChatMessages, system_prompt: str, **kwargs: Any) -> str:
         assert messages
@@ -928,7 +949,7 @@ class LlmBot:
             messages.insert(0, {"role": "system", "content": system_prompt})
 
         print(
-            provider.model_name,
+            provider.provider_name,
             "####",
             len(messages),
             "####",
@@ -943,7 +964,7 @@ class LlmBot:
         assert isinstance(chat_completion.choices[0].message.content, str), str(chat_completion)
         answer: str = chat_completion.choices[0].message.content
         print(
-            provider.model_name,
+            provider.provider_name,
             "####",
             len(messages),
             "####",

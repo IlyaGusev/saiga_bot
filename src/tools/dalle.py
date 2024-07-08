@@ -59,7 +59,7 @@ class DalleTool(Tool):
             {"type": "text", "text": prompt_russian},
             {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"},
+                "image_url": {"url": f"data:image/png;base64,{encoded_image}"},
             },
         ]
         return content

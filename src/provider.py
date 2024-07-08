@@ -28,6 +28,7 @@ class LLMProvider:
         params: Dict[str, Any] = DEFAULT_PARAMS,
         message_count_limit: Dict[str, Any] = DEFAULT_MESSAGE_COUNT_LIMIT,
     ):
+        self.provider_name = provider_name
         self.model_name = model_name
         self.can_handle_images = can_handle_images
         self.can_handle_tools = can_handle_tools
