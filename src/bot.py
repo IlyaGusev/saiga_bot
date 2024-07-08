@@ -429,6 +429,9 @@ class LlmBot:
         user_id = message.from_user.id
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
+        if model not in self.providers:
+            await message.reply(self.localization.MODEL_NOT_SUPPORTED)
+            return
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         text = self.localization.REMAINING_MESSAGES.format(model=model, remaining_count=remaining_count)
         await message.reply(text)
