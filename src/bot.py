@@ -5,6 +5,7 @@ import copy
 import traceback
 import base64
 import io
+import re
 from email.utils import parseaddr
 from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine, Tuple, BinaryIO
 
@@ -149,7 +150,7 @@ class LlmBot:
         ]
         for command, func in commands:
             self.dp.message.register(func, Command(command))
-        self.dp.message.register(self.wrong_command, lambda m: m.text and m.text.startswith("/"))
+        self.dp.message.register(self.wrong_command, Command(re.compile(r"\S+")))
         self.dp.message.register(
             self.successful_payment_handler, lambda m: m.content_type == ContentType.SUCCESSFUL_PAYMENT
         )
@@ -204,7 +205,11 @@ class LlmBot:
         await message.reply(content, parse_mode=ParseMode.MARKDOWN)
 
     async def wrong_command(self, message: Message) -> None:
-        await message.reply(self.localization.WRONG_COMMAND)
+        chat_id = message.chat.id
+        assert message.from_user
+        is_chat = chat_id != message.from_user.id
+        if not is_chat:
+            await message.reply(self.localization.WRONG_COMMAND)
 
     #
     # History management
