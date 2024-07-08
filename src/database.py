@@ -175,6 +175,17 @@ class Database:
             session.commit()
         return conv_id
 
+    def get_user_id_by_conv_id(self, conv_id: str) -> int:
+        with self.Session() as session:
+            conv = (
+                session.query(Conversation)
+                .filter(Conversation.conv_id == conv_id)
+                .order_by(Conversation.timestamp.desc())
+                .first()
+            )
+            assert conv
+            return conv.user_id
+
     def get_current_conv_id(self, user_id: int) -> str:
         with self.Session() as session:
             conv = (

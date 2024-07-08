@@ -1,0 +1,12 @@
+{
+    "token": "",
+    "admin_user_name": "",
+    "admin_user_id": -1,
+    "temperature_range": [0.0, 0.5, 0.8, 1.0, 1.2],
+    "top_p_range": [0.8, 0.9, 0.95, 0.98, 1.0],
+    "timezone": "Europe/Moscow",
+    "sub_price_rub": 500,
+    "sub_price_stars": 250,
+    "sub_duration": 604800,
+    "output_chunk_size": 3500
+}
