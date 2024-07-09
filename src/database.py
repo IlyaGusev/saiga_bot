@@ -294,6 +294,7 @@ class Database:
         params = self.get_current_model_parameters(user_id)
         if params and params.generation_parameters and params.generation_parameters != "null":
             parsed_params: Dict[str, Any] = json.loads(params.generation_parameters)
+            parsed_params.pop("tools", None)
             return parsed_params
         return None
 

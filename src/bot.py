@@ -848,6 +848,7 @@ class LlmBot:
         history = self.db.fetch_conversation(conv_id)
         params = self.db.get_parameters(chat_id)
         params = provider.params if params is None else params
+        params = copy.deepcopy(params)
         system_prompt = self.db.get_system_prompt(chat_id)
         system_prompt = provider.system_prompt if system_prompt is None else system_prompt
         content = await self._build_content(message)
@@ -934,11 +935,15 @@ class LlmBot:
         history = self._prepare_history(history, provider, False)
         params = self.db.get_parameters(user_id)
         params = provider.params if params is None else params
+        params = copy.deepcopy(params)
         system_prompt = self.db.get_system_prompt(user_id)
         system_prompt = provider.system_prompt if system_prompt is None else system_prompt
         placeholder = await message.reply("💬")
         history = self._fix_image_roles(history)
         history = self._fix_broken_tool_calls(history)
+        history = self._merge_messages(history)
+        if history[-1]["role"] == "assistant":
+            history.pop()
         answer = await self._query_api(provider=provider, messages=history, system_prompt=system_prompt, **params)
         await placeholder.edit_text(answer[: self.config.output_chunk_size])
 
