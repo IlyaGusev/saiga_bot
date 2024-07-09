@@ -38,6 +38,7 @@
         "INCORRECT_EMAIL": "Некорректный e-mail!",
         "FILLED_EMAIL": "Спасибо! Адрес задан: {email}",
         "ADMINS_ONLY": "{username}, только админы могут это делать",
+        "CREATORS_ONLY": "{username}, только создатели бота могут это делать",
         "PAYMENT_URL": "Ссылка для оплаты: {url}",
         "PAYMENT_CANCEL": "Платёж отменён!",
         "DALLE_LIMIT": "Лимит по генерации картинок исчерпан, восстановится через 24 часа",
@@ -46,6 +47,10 @@
         "BUY_WITH_STARS": "Купить (за Telegram Stars)",
         "BUY_WITH_RUB": "Купить (за рубли)",
         "WRONG_COMMAND": "Такой команды у бота нет. Если вы не пытались ввести команду, уберите '/' из начала сообщения.",
+        "PAY_SUPPORT": "Возврат средств за подписку возможен в течение 12 часов с момента её оформления. Контакт: @YallenGusev",
+        "PRIVACY": {
+            "template_name": "ru_privacy"
+        },
         "HELP": {
             "template_name": "ru_help"
         },

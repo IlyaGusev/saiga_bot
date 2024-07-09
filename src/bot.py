@@ -182,6 +182,8 @@ class LlmBot:
             ("tools", self.toogle_tools),
             ("history", self.history),
             ("debug", self.debug),
+            ("privacy", self.privacy),
+            ("paysupport", self.pay_support),
         ]
         for command, func in commands:
             self.dp.message.register(func, Command(command))
@@ -248,6 +250,12 @@ class LlmBot:
         is_chat = chat_id != message.from_user.id
         if not is_chat:
             await message.reply(self.localization.WRONG_COMMAND)
+
+    async def pay_support(self, message: Message) -> None:
+        await message.reply(self.localization.PAY_SUPPORT)
+
+    async def privacy(self, message: Message) -> None:
+        await message.reply(self.localization.PRIVACY.render(admin_username=self.config.admin_user_name))
 
     #
     # History management

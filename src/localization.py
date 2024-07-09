@@ -68,6 +68,8 @@ class Localization:
     BUY_WITH_STARS: str
     BUY_WITH_RUB: str
     WRONG_COMMAND: str
+    PAY_SUPPORT: str
+    PRIVACY: Template
 
     @classmethod
     def load(cls, path: str, language: str) -> "Localization":
