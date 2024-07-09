@@ -71,6 +71,26 @@ def _crop_content(content: str) -> str:
     return IMAGE_PLACEHOLDER
 
 
+async def _reply(message: Message, text: str, **kwargs: Any) -> Union[Message, bool]:
+    try:
+        return await message.reply(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
+    except Exception:
+        try:
+            return await message.reply(text, parse_mode=ParseMode.HTML, **kwargs)
+        except Exception:
+            return await message.reply(text, parse_mode=None, **kwargs)
+
+
+async def _edit_text(message: Message, text: str, **kwargs: Any) -> Union[Message, bool]:
+    try:
+        return await message.edit_text(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
+    except Exception:
+        try:
+            return await message.edit_text(text, parse_mode=ParseMode.HTML, **kwargs)
+        except Exception:
+            return await message.edit_text(text, parse_mode=None, **kwargs)
+
+
 class LlmBot:
     def __init__(
         self,
@@ -690,6 +710,7 @@ class LlmBot:
             return
         current_value = self.db.are_tools_enabled(chat_id)
         self.db.set_enable_tools(chat_id, not current_value)
+        self.db.create_conv_id(chat_id)
         if not current_value:
             await message.reply(self.localization.ENABLED_TOOLS)
         else:
@@ -898,14 +919,15 @@ class LlmBot:
             else:
                 answer_parts = [answer]
 
-            new_message = await placeholder.edit_text(answer_parts[0])
+            new_message = await _edit_text(placeholder, answer_parts[0])
             assert isinstance(new_message, Message)
             for part in answer_parts[1:]:
-                new_message = await message.reply(part)
+                new_message = await _reply(message, part)
                 assert isinstance(new_message, Message)
 
             markup = self.likes_kb.as_markup()
-            new_message = await new_message.edit_text(
+            new_message = await _edit_text(
+                new_message,
                 answer_parts[-1],
                 reply_markup=markup,
             )

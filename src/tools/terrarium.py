@@ -35,7 +35,8 @@ class TerrariumTool(Tool):
                 "name": "terrarium",
                 "description": "Calling Python interperter with an isolated environment. "
                 "Use only when you need to calculate something or when explicitly asked. "
-                "Do not use this tool when code excecution is not actually needed",
+                "Do not use this tool when code excecution is not actually needed. For instance, "
+                "when user just asks to write code, DO NOT call this tool.",
                 "parameters": {
                     "type": "object",
                     "properties": {
