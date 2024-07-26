@@ -50,8 +50,10 @@ class Localization:
     SUB_DESCRIPTION: Template
     NEW_TEMPERATURE: str
     NEW_TOP_P: str
+    NEW_FREQUENCY_PENALTY: str
     SELECT_TEMPERATURE: str
     SELECT_TOP_P: str
+    SELECT_FREQUENCY_PENALTY: str
     CURRENT_PARAMS: str
     TOOLS_NOT_SUPPORTED_BY_MODEL: str
     ENABLED_TOOLS: str
@@ -70,6 +72,7 @@ class Localization:
     WRONG_COMMAND: str
     PAY_SUPPORT: str
     PRIVACY: Template
+    FILE_IS_TOO_BIG: str
 
     @classmethod
     def load(cls, path: str, language: str) -> "Localization":

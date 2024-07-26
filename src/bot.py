@@ -8,7 +8,7 @@ import io
 import re
 from email.utils import parseaddr
 from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine, Tuple, BinaryIO
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import fire  # type: ignore
 import tiktoken
@@ -58,6 +58,7 @@ class BotConfig:
     admin_user_id: int
     temperature_range: List[float]
     top_p_range: List[float]
+    freq_penalty_range: List[float] = field(default_factory=lambda: [0.0, 0.05, 0.1, 0.2, 0.5, 1.0])
     timezone: str = "Europe/Moscow"
     sub_price_rub: int = 500
     sub_price_stars: int = 250
@@ -153,6 +154,10 @@ class LlmBot:
         for value in self.config.top_p_range:
             self.top_p_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"settopp:{value}"))
 
+        self.freq_penalty_kb = InlineKeyboardBuilder()
+        for value in self.config.freq_penalty_range:
+            self.freq_penalty_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"setfreqpenalty:{value}"))
+
         self.buy_kb = InlineKeyboardBuilder()
         self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WITH_STARS, callback_data="buy:stars"))
 
@@ -176,6 +181,7 @@ class LlmBot:
             ("getparams", self.get_params),
             ("settemperature", self.set_temperature),
             ("settopp", self.set_top_p),
+            ("setfrequencypenalty", self.set_frequency_penalty),
             ("setemail", self.set_email),
             ("subinfo", self.sub_info),
             ("subbuy", self.sub_buy),
@@ -199,6 +205,7 @@ class LlmBot:
             ("setcharacter:", self.set_character_button_handler),
             ("settemperature:", self.set_temperature_button_handler),
             ("settopp:", self.set_top_p_button_handler),
+            ("setfreqpenalty:", self.set_frequency_penalty_button_handler),
             ("buy:yookassa", self.yookassa_sub_buy_proceed),
             ("buy:stars", self.stars_sub_buy_proceed),
         ]
@@ -413,6 +420,7 @@ class LlmBot:
             prompt = self.localization.EMPTY_SYSTEM_PROMPT
         await message.reply(prompt)
 
+    @check_admin
     async def reset_system(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
@@ -688,6 +696,27 @@ class LlmBot:
         assert isinstance(callback.message, Message)
         await callback.message.edit_text(self.localization.NEW_TOP_P.format(top_p=top_p))
 
+    @check_admin
+    async def set_frequency_penalty(self, message: Message) -> None:
+        await message.reply(self.localization.SELECT_FREQUENCY_PENALTY, reply_markup=self.freq_penalty_kb.as_markup())
+
+    @check_admin
+    async def set_frequency_penalty_button_handler(self, callback: CallbackQuery) -> None:
+        assert callback.message
+        assert callback.data
+        chat_id = callback.message.chat.id
+        model = self.db.get_current_model(chat_id)
+        provider = self.providers[model]
+        frequency_penalty = float(callback.data.split(":")[1])
+        params = self.db.get_parameters(chat_id)
+        params = provider.params if params is None else params
+        params["frequency_penalty"] = frequency_penalty
+        self.db.set_parameters(chat_id, **params)
+        assert isinstance(callback.message, Message)
+        await callback.message.edit_text(
+            self.localization.NEW_FREQUENCY_PENALTY.format(frequency_penalty=frequency_penalty)
+        )
+
     async def get_params(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
@@ -871,6 +900,11 @@ class LlmBot:
         print(user_id, model, remaining_count)
         if remaining_count <= 0:
             await message.reply(self.localization.LIMIT_EXCEEDED.format(model=model))
+            return
+
+        is_big_file = await self._is_big_file(message)
+        if is_big_file:
+            await message.reply(self.localization.FILE_IS_TOO_BIG)
             return
 
         conv_id = self.db.get_current_conv_id(chat_id)
@@ -1071,6 +1105,20 @@ class LlmBot:
                 return extracted_text
 
         return None
+
+    async def _is_big_file(self, message: Message) -> bool:
+        content_type = message.content_type
+        if content_type != "document":
+            return False
+        document = message.document
+        if not document:
+            return False
+        try:
+            await self.bot.get_file(document.file_id)
+        except TelegramBadRequest:
+            if "file is too big" in traceback.format_exc():
+                return True
+        return False
 
     #
     # Auxiliary methods
