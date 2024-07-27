@@ -2,17 +2,21 @@ MarkdownTableOfContents {
     width: 20%;
 }
 
-IndexInput {
-    layout: horizontal;
-    height: 3;
-    margin: 1 1;
-}
-
-IndexInput Input {
+Input {
     width: 1fr;
     margin-right: 1;
+    layout: horizontal;
 }
 
-IndexInput Button {
-    width: auto;
+#loading {
+    width: 100%;
+    height: 100%;
+    content-align: center middle;
+    background: $surface;
+    color: $text;
+    text-style: bold;
+}
+
+#meta {
+    text-align: center;
 }

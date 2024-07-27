@@ -4,19 +4,9 @@ import shutil
 
 from textual import on, events
 from textual.app import App, ComposeResult, Binding
-from textual.widgets import Footer, MarkdownViewer, Static, Input
+from textual.widgets import Header, Footer, MarkdownViewer, Static, Input
 from textual.validation import Number
 from textual.containers import Container
-
-
-class RecordInfo(Static):
-    def update_info(self, current: int, total: int):
-        self.update(f"Record {current + 1} of {total}")
-
-
-class FullScreenLoadingIndicator(Static):
-    def render(self) -> str:
-        return "Loading..."
 
 
 def to_markdown(record):
@@ -25,6 +15,14 @@ def to_markdown(record):
     for m in messages:
         result += "# {role}\n{content}\n\n".format(role=m["role"], content=m["content"])
     return result
+
+
+def to_meta(record):
+    meta = {k: v for k, v in record.items() if k != "messages"}
+    result = []
+    for k, v in meta.items():
+        result.append(f"{k}={v}")
+    return ", ".join(result)
 
 
 class Browser(App):
@@ -43,12 +41,14 @@ class Browser(App):
         self.current_idx = 0
         with open(sys.argv[1]) as r:
             self.records = [json.loads(line) for line in r]
+        yield Header()
+        yield Static("", id="meta")
         yield Container(
             MarkdownViewer(),
-            FullScreenLoadingIndicator(),
+            Static("Loading...", id="loading"),
             id="main-content"
         )
-        yield RecordInfo()
+        yield Static("", id="counter")
         yield Input(placeholder="Enter index", validators=[Number()], restrict="[0-9]*", valid_empty=True)
         yield Footer()
 
@@ -61,21 +61,29 @@ class Browser(App):
         return self.query_one(Footer)
 
     @property
-    def record_info(self) -> RecordInfo:
-        return self.query_one(RecordInfo)
+    def header(self) -> Header:
+        return self.query_one(Header)
+
+    @property
+    def meta_info(self) -> Static:
+        return self.query_one("#meta")
+
+    @property
+    def counter(self) -> Static:
+        return self.query_one("#counter")
 
     @property
     def input(self) -> Input:
         return self.query_one(Input)
 
     @property
-    def loading_indicator(self) -> FullScreenLoadingIndicator:
-        return self.query_one(FullScreenLoadingIndicator)
+    def loading_indicator(self) -> Static:
+        return self.query_one("#loading")
 
     async def show_record(self):
         if len(self.records) == 0:
             await self.markdown_viewer.document.update("No records left")
-            self.record_info.update_info(-1, 0)
+            self.counter.update("No records")
             return
 
         assert self.current_idx < len(self.records)
@@ -83,8 +91,10 @@ class Browser(App):
         self.markdown_viewer.display = False
         self.loading_indicator.display = True
 
-        await self.markdown_viewer.document.update(to_markdown(self.records[self.current_idx]))
-        self.record_info.update_info(self.current_idx, len(self.records))
+        record = self.records[self.current_idx]
+        self.meta_info.update(to_meta(record))
+        await self.markdown_viewer.document.update(to_markdown(record))
+        self.counter.update(f"Record {self.current_idx + 1} of {len(self.records)}")
 
         def show_markdown():
             self.markdown_viewer.focus()
@@ -99,7 +109,7 @@ class Browser(App):
 
     @on(Input.Submitted)
     async def goto(self, event: Input.Submitted) -> None:
-        if not event.validation_result.is_valid:
+        if not event.validation_result or not event.validation_result.is_valid:
             self.notify("Invalid index. Please enter a number between 1 and {}.".format(len(self.records)))
             return
 
@@ -127,7 +137,6 @@ class Browser(App):
     async def action_delete(self) -> None:
         assert 0 <= self.current_idx < len(self.records)
         self.records.pop(self.current_idx)
-        self.current_idx += 1
         if self.current_idx >= len(self.records):
             self.current_idx = 0
         await self.show_record()
@@ -147,6 +156,7 @@ class Browser(App):
             for record in self.records:
                 w.write(json.dumps(record, ensure_ascii=False) + "\n")
         shutil.move(self.path + "_tmp", self.path)
+        self.notify("Saved!")
 
 
 if __name__ == "__main__":
