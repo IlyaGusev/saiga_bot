@@ -7,6 +7,7 @@ import base64
 import io
 import re
 from email.utils import parseaddr
+from enum import Enum
 from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine, Tuple, BinaryIO
 from dataclasses import dataclass, field
 
@@ -50,6 +51,19 @@ IMAGE_PLACEHOLDER = "<image_placeholder>"
 ChatMessage = Dict[str, Any]
 ChatMessages = List[ChatMessage]
 
+@dataclass
+class SubConfig:
+    price: int = 500
+    currency: str = "RUB"
+    duration: int = 7 * 86400
+
+
+class SubKey(str, Enum):
+    RUB_WEEK = "rub_week"
+    RUB_MONTH = "rub_month"
+    XTR_WEEK = "xtr_week"
+    XTR_MONTH = "xtr_month"
+
 
 @dataclass
 class BotConfig:
@@ -60,10 +74,13 @@ class BotConfig:
     top_p_range: List[float]
     freq_penalty_range: List[float] = field(default_factory=lambda: [0.0, 0.05, 0.1, 0.2, 0.5, 1.0])
     timezone: str = "Europe/Moscow"
-    sub_price_rub: int = 500
-    sub_price_stars: int = 250
-    sub_duration: int = 7 * 86400
     output_chunk_size: int = 3500
+    sub_configs: Dict[SubKey, SubConfig] = field(default_factory=lambda: {
+        SubKey.RUB_WEEK: SubConfig(500, "RUB", 7 * 86400),
+        SubKey.RUB_MONTH: SubConfig(2100, "RUB", 31 * 86400),
+        SubKey.XTR_WEEK:  SubConfig(250, "XTR", 7 * 86400),
+        SubKey.XTR_MONTH:  SubConfig(1000, "XTR", 31 * 86400),
+    })
 
 
 def _crop_content(content: str) -> str:
@@ -159,7 +176,8 @@ class LlmBot:
             self.freq_penalty_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"setfreqpenalty:{value}"))
 
         self.buy_kb = InlineKeyboardBuilder()
-        self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WITH_STARS, callback_data="buy:stars"))
+        self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WEEK_WITH_STARS, callback_data="buy:stars:xtr_week"))
+        self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_MONTH_WITH_STARS, callback_data="buy:stars:xtr_month"))
 
         self.bot = Bot(token=self.config.token, default=DefaultBotProperties(parse_mode=None))
         self.bot_info: Optional[User] = None
@@ -216,10 +234,12 @@ class LlmBot:
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.yookassa: Optional[YookassaHandler] = None
         if yookassa_config_path and os.path.exists(yookassa_config_path):
-            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WITH_RUB, callback_data="buy:yookassa"))
+            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WEEK_WITH_RUB, callback_data="buy:yookassa:rub_week"))
+            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_MONTH_WITH_RUB, callback_data="buy:yookassa:rub_month"))
             with open(yookassa_config_path) as r:
                 config = json.load(r)
                 self.yookassa = YookassaHandler(**config)
+        self.buy_kb.adjust(2)
 
     async def start_polling(self) -> None:
         self.scheduler = AsyncIOScheduler(timezone=self.config.timezone)
@@ -532,13 +552,21 @@ class LlmBot:
 
         limits = {name: provider.limits for name, provider in self.providers.items()}
         sub_limits = self.localization.LIMITS.render(limits=limits, mode="subscribed").strip()
-        description = self.localization.SUB_DESCRIPTION.render(sub_limits=sub_limits, price=self.config.sub_price_rub)
+        description = self.localization.SUB_DESCRIPTION.render(
+            sub_limits=sub_limits,
+            price_week=self.config.sub_configs[SubKey.RUB_WEEK].price,
+            price_month=self.config.sub_configs[SubKey.RUB_MONTH].price,
+        )
         await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
 
     async def stars_sub_buy_proceed(self, callback: CallbackQuery) -> None:
         assert callback.from_user
         assert callback.message
         assert isinstance(callback.message, Message)
+        assert callback.data
+        assert "buy:stars:" in callback.data
+
+        sub_key_str = callback.data.split(":")[2]
         user_id = callback.from_user.id
         chat_id = callback.message.chat.id
         is_chat = chat_id != user_id
@@ -551,16 +579,26 @@ class LlmBot:
             await callback.message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
-        title = self.localization.SUB_SHORT_TITLE
-        description = self.localization.SUB_TITLE.format(user_id=user_id)
+        key = SubKey(sub_key_str)
+        key_to_short_title = {
+            SubKey.XTR_WEEK: self.localization.SUB_WEEK_SHORT_TITLE,
+            SubKey.XTR_MONTH: self.localization.SUB_MONTH_SHORT_TITLE,
+        }
+        key_to_title = {
+            SubKey.XTR_WEEK: self.localization.SUB_WEEK_TITLE,
+            SubKey.XTR_MONTH: self.localization.SUB_MONTH_TITLE
+        }
+        title = key_to_short_title[key]
+        description = key_to_title[key].format(user_id=user_id)
+        sub = self.config.sub_configs[key]
         await self.bot.send_invoice(
             chat_id,
             title=title,
             description=description,
-            prices=[LabeledPrice(label=title, amount=self.config.sub_price_stars)],
+            prices=[LabeledPrice(label=title, amount=sub.price)],
             provider_token="",
             currency="XTR",
-            payload=str(user_id),
+            payload=f"{user_id}#{sub.duration}",
             reply_to_message_id=callback.message.message_id,
         )
 
@@ -581,15 +619,22 @@ class LlmBot:
         payload = successful_payment.invoice_payload
         charge_id = successful_payment.telegram_payment_charge_id
         self.db.add_charge(user_id, charge_id)
-        assert user_id == int(payload)
-        self.db.subscribe_user(user_id, self.config.sub_duration)
+        payload_user_id, payload_duration = payload.split("#")
+        assert user_id == int(payload_user_id)
+        self.db.subscribe_user(user_id, int(payload_duration))
         await self.bot.send_message(chat_id, self.localization.SUB_SUCCESS)
 
     async def yookassa_sub_buy_proceed(self, callback: CallbackQuery) -> None:
         assert self.yookassa
         assert callback.from_user
         assert callback.message
+        assert callback.data
+        assert "buy:yookassa:" in callback.data
         assert isinstance(callback.message, Message)
+        assert self.bot_info
+        assert self.bot_info.username
+
+        sub_key_str = callback.data.split(":")[2]
         user_id = callback.from_user.id
         email = self.db.get_email(user_id)
         if not email:
@@ -607,14 +652,18 @@ class LlmBot:
             await callback.message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
-        timestamp = self.db.get_current_ts()
-        title = self.localization.SUB_TITLE.format(user_id=user_id)
-        assert self.bot_info
-        assert self.bot_info.username
+        key = SubKey(sub_key_str)
+        sub = self.config.sub_configs[key]
+        key_to_title = {
+            SubKey.RUB_WEEK: self.localization.SUB_WEEK_TITLE,
+            SubKey.RUB_MONTH: self.localization.SUB_MONTH_TITLE
+        }
+        title = key_to_title[key].format(user_id=user_id)
         payment_data = self.yookassa.create_payment(
-            self.config.sub_price_rub, title, email=email, bot_username=self.bot_info.username
+            sub.price, title, email=email, bot_username=self.bot_info.username
         )
         payment_id = payment_data["id"]
+        timestamp = self.db.get_current_ts()
         try:
             url = payment_data["confirmation"]["confirmation_url"]
             status = payment_data["status"]
@@ -636,7 +685,8 @@ class LlmBot:
                 payment_id=payment.payment_id, status=status, internal_status=payment.internal_status
             )
             if status == YookassaStatus.SUCCEEDED:
-                self.db.subscribe_user(payment.user_id, self.config.sub_duration)
+                sub_key = SubKey(self.yookassa.get_sub_key(payment.payment_id))
+                self.db.subscribe_user(payment.user_id, self.config.sub_configs[sub_key].duration)
                 await self.bot.send_message(chat_id=payment.chat_id, text=self.localization.SUB_SUCCESS)
                 self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
             elif status == YookassaStatus.CANCELED:

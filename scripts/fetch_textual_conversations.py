@@ -1,6 +1,7 @@
 import json
 
 import fire
+from tqdm import tqdm
 
 from src.database import Database
 
@@ -21,10 +22,10 @@ def merge_messages(messages):
 
 def main(db_path: str, output_path: str, min_timestamp: int = None, fetch_chats: bool = False):
     db = Database(db_path)
-    conversations = set(db.get_all_conv_ids())
+    conversations = set(db.get_all_conv_ids(min_timestamp=min_timestamp))
     records = []
     first_messages = set()
-    for conv_id in conversations:
+    for conv_id in tqdm(conversations):
         messages = db.fetch_conversation(conv_id)
 
         timestamps = {m.get("timestamp", None) for m in messages}

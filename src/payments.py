@@ -47,3 +47,9 @@ class YookassaHandler:
     def check_payment(self, payment_id: str) -> YookassaStatus:
         payment = json.loads((Payment.find_one(payment_id)).json())
         return YookassaStatus(payment["status"])
+
+    def get_sub_key(self, payment_id: str) -> str:
+        payment = json.loads((Payment.find_one(payment_id)).json())
+        if "недел" in payment["description"]:
+            return "rub_week"
+        return "rub_month"

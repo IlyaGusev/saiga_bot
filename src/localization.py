@@ -35,8 +35,10 @@ class Localization:
     ACTIVE_SUB: str
     REMAINING_MESSAGES: str
     SET_EMAIL: str
-    SUB_TITLE: str
-    SUB_SHORT_TITLE: str
+    SUB_WEEK_TITLE: str
+    SUB_MONTH_TITLE: str
+    SUB_WEEK_SHORT_TITLE: str
+    SUB_MONTH_SHORT_TITLE: str
     SUB_NOT_CHAT: str
     SUB_SUCCESS: str
     MODEL_NOT_SUPPORTED: str
@@ -67,8 +69,10 @@ class Localization:
     DALLE_LIMIT: str
     DALLE_PROMPT: str
     DALLE_ERROR: str
-    BUY_WITH_STARS: str
-    BUY_WITH_RUB: str
+    BUY_WEEK_WITH_STARS: str
+    BUY_WEEK_WITH_RUB: str
+    BUY_MONTH_WITH_STARS: str
+    BUY_MONTH_WITH_RUB: str
     WRONG_COMMAND: str
     PAY_SUPPORT: str
     PRIVACY: Template
