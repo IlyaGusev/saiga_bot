@@ -1,4 +1,5 @@
-from typing import Dict, Any
+import copy
+from typing import Dict, Any, Optional
 
 from openai import AsyncOpenAI
 
@@ -27,6 +28,9 @@ class LLMProvider:
         history_max_tokens: int = DEFAULT_HISTORY_MAX_TOKENS,
         params: Dict[str, Any] = DEFAULT_PARAMS,
         message_count_limit: Dict[str, Any] = DEFAULT_MESSAGE_COUNT_LIMIT,
+        tokenizer_name: Optional[str] = None,
+        merge_system: bool = False,
+        merge_spaces: bool = False,
     ):
         self.provider_name = provider_name
         self.model_name = model_name
@@ -34,8 +38,11 @@ class LLMProvider:
         self.can_handle_tools = can_handle_tools
         self.system_prompt = system_prompt
         self.history_max_tokens = history_max_tokens
-        self.params = params
+        self.params = copy.deepcopy(params)
         self.limits = message_count_limit
+        self.tokenizer_name = tokenizer_name
+        self.merge_system = merge_system
+        self.merge_spaces = merge_spaces
         assert "standard" in self.limits
         assert "subscribed" in self.limits
         self.api = AsyncOpenAI(base_url=base_url, api_key=api_key)

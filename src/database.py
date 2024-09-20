@@ -460,9 +460,12 @@ class Database:
             session.add(new_subscription)
             session.commit()
 
-    def get_all_conv_ids(self) -> List[str]:
+    def get_all_conv_ids(self, min_timestamp: Optional[int] = None) -> List[str]:
         with self.Session() as session:
-            conversations = session.query(Conversation).all()
+            if min_timestamp is None:
+                conversations = session.query(Conversation).all()
+            else:
+                conversations = session.query(Conversation).filter(Conversation.timestamp >= min_timestamp).all()
             return [conv.conv_id for conv in conversations]
 
     def _serialize_content(self, content: Union[None, str, List[Dict[str, Any]]]) -> str:

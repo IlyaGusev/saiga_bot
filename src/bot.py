@@ -640,8 +640,8 @@ class LlmBot:
                 await self.bot.send_message(chat_id=payment.chat_id, text=self.localization.SUB_SUCCESS)
                 self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
             elif status == YookassaStatus.CANCELED:
-                await self.bot.send_message(chat_id=payment.chat_id, text=self.localization.PAYMENT_CANCEL)
                 self.db.set_payment_status(payment.payment_id, status=status.value, internal_status="completed")
+                await self.bot.send_message(chat_id=payment.chat_id, text=self.localization.PAYMENT_CANCEL)
 
     async def set_email(self, message: Message) -> None:
         assert message.text
@@ -671,7 +671,7 @@ class LlmBot:
         provider = self.providers[model]
         temperature = float(callback.data.split(":")[1])
         params = self.db.get_parameters(chat_id)
-        params = provider.params if params is None else params
+        params = copy.deepcopy(provider.params) if params is None else params
         params["temperature"] = temperature
         self.db.set_parameters(chat_id, **params)
         assert isinstance(callback.message, Message)
@@ -1012,10 +1012,21 @@ class LlmBot:
         await placeholder.edit_text(answer[: self.config.output_chunk_size])
 
     @staticmethod
-    async def _query_api(provider: LLMProvider, messages: ChatMessages, system_prompt: str, **kwargs: Any) -> str:
+    async def _query_api(
+        provider: LLMProvider,
+        messages: ChatMessages,
+        system_prompt: str,
+        num_retries: int = 2,
+        **kwargs: Any
+    ) -> str:
         assert messages
         if messages[0]["role"] != "system" and system_prompt.strip():
             messages.insert(0, {"role": "system", "content": system_prompt})
+
+        if provider.merge_system and messages[0]["role"] == "system":
+            system_message = messages[0]["content"]
+            messages = messages[1:]
+            messages[0]["content"] = system_message + "\n\n" + messages[0]["content"]
 
         print(
             provider.provider_name,
@@ -1025,13 +1036,23 @@ class LlmBot:
             _crop_content(messages[-1]["content"]),
         )
         casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
-        chat_completion = await provider.api.chat.completions.create(
-            model=provider.model_name, messages=casted_messages, **kwargs
-        )
-        assert chat_completion.choices, str(chat_completion)
-        assert chat_completion.choices[0].message.content, str(chat_completion)
-        assert isinstance(chat_completion.choices[0].message.content, str), str(chat_completion)
-        answer: str = chat_completion.choices[0].message.content
+        answer: Optional[str] = None
+        for _ in range(num_retries):
+            try:
+                chat_completion = await provider.api.chat.completions.create(
+                    model=provider.model_name, messages=casted_messages, **kwargs
+                )
+                assert chat_completion.choices, str(chat_completion)
+                assert chat_completion.choices[0].message.content, str(chat_completion)
+                assert isinstance(chat_completion.choices[0].message.content, str), str(chat_completion)
+                answer = chat_completion.choices[0].message.content
+                break
+            except Exception:
+                traceback.print_exc()
+                continue
+        assert answer
+        if provider.merge_spaces:
+            answer = answer.replace("  ", " ")
         print(
             provider.provider_name,
             "####",
@@ -1137,17 +1158,21 @@ class LlmBot:
         )
 
     def _count_tokens(self, messages: ChatMessages, provider: LLMProvider) -> int:
-        model_name = provider.model_name
+        tokenizer_name = provider.tokenizer_name
+        if not tokenizer_name:
+            tokenizer_name = provider.model_name
         url = str(provider.api.base_url)
         tokens_count = 0
 
         if "api.openai.com" in url:
-            encoding = tiktoken.encoding_for_model(model_name)
+            if "o1" in tokenizer_name:
+                return 0
+            encoding = tiktoken.encoding_for_model(tokenizer_name)
             for m in messages:
                 if isinstance(m["content"], str):
                     tokens_count += len(encoding.encode(m["content"]))
                 elif self._is_image_content(m["content"]):
-                    tokens_count += 1000
+                    tokens_count += 2000
             return tokens_count
 
         if "anthropic" in url:
@@ -1156,7 +1181,7 @@ class LlmBot:
                     tokens_count += len(m["content"]) // 2
             return tokens_count
 
-        tokenizer = Tokenizers.get(model_name)
+        tokenizer = Tokenizers.get(tokenizer_name)
         tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         tokens_count = len(tokens)
         return tokens_count
