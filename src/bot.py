@@ -89,6 +89,29 @@ def _crop_content(content: str) -> str:
     return IMAGE_PLACEHOLDER
 
 
+def _split_message(text: str, output_chunk_size: int) -> List[str]:
+    if len(text) <= output_chunk_size:
+        return [text]
+
+    chunks: List[str] = []
+    paragraphs = text.split("\n\n")
+    for paragraph in paragraphs:
+        if chunks and len(chunks[-1]) + len(paragraph) + 2 <= output_chunk_size:
+            chunks[-1] += '\n\n' + paragraph
+        else:
+            chunks.append(paragraph)
+
+    final_chunks: List[str] = []
+    for chunk in chunks:
+        if len(chunk) <= output_chunk_size:
+            final_chunks.append(chunk)
+            continue
+        parts = [chunk[i : i + output_chunk_size] for i in range(0, len(chunk), output_chunk_size)]
+        final_chunks.extend(parts)
+
+    return final_chunks
+
+
 async def _reply(message: Message, text: str, **kwargs: Any) -> Union[Message, bool]:
     try:
         return await message.reply(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
@@ -1007,7 +1030,7 @@ class LlmBot:
 
             output_chunk_size = self.config.output_chunk_size
             if output_chunk_size is not None:
-                answer_parts = [answer[i : i + output_chunk_size] for i in range(0, len(answer), output_chunk_size)]
+                answer_parts = _split_message(answer, output_chunk_size=output_chunk_size)
             else:
                 answer_parts = [answer]
 
