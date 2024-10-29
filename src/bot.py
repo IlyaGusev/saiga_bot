@@ -1058,7 +1058,7 @@ class LlmBot:
 
         except Exception:
             traceback.print_exc()
-            text = self.localization.ERROR.format(admin_username=self.config.admin_user_name, chat_id=chat_id)
+            text = self.localization.ERROR.format(admin_username=self.config.admin_user_name, conv_id=conv_id)
             await placeholder.edit_text(text)
 
     @check_creator

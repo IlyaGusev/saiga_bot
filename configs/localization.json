@@ -28,7 +28,7 @@
         "CLAUDE_HIGH_TEMPERATURE": "Claude не поддерживает температуру выше 1, задайте новую с помощью /settemperature",
         "CONTENT_NOT_SUPPORTED_BY_MODEL": "Выбранная модель не может обработать ваше сообщение",
         "CONTENT_NOT_SUPPORTED": "Такой тип сообщений (ещё) не поддерживается",
-        "ERROR": "Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться. Попробуйте сделать /reset и пришлите @{admin_username} вот это число: {chat_id}",
+        "ERROR": "Что-то пошло не так, ответ от Сайги не получен или не смог отобразиться. Попробуйте сделать /reset и пришлите @{admin_username} вот эту строку: {conv_id}",
         "NEW_TEMPERATURE": "Новая температура задана:\n\n{temperature}",
         "NEW_TOP_P": "Новое top-p задано:\n\n{top_p}",
         "NEW_FREQUENCY_PENALTY": "Новое freq penalty задано:\n\n{frequency_penalty}",
