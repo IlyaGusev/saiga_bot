@@ -174,9 +174,20 @@ class LlmBot:
                 self.characters = json.load(r)
 
         self.db = Database(db_path)
-
+        self.dp = self.build_dispatcher()
         self.document_loader = DocumentLoader()
+        self.bot = Bot(token=self.config.token, default=DefaultBotProperties(parse_mode=None))
+        self.bot_info: Optional[User] = None
+        self.scheduler: Optional[AsyncIOScheduler] = None
 
+        self.yookassa: Optional[YookassaHandler] = None
+        if yookassa_config_path and os.path.exists(yookassa_config_path):
+            with open(yookassa_config_path) as r:
+                config = json.load(r)
+                self.yookassa = YookassaHandler(**config)
+        self.build_menus(add_yookassa=self.yookassa is not None)
+
+    def build_menus(self, add_yookassa: bool = False) -> None:
         self.models_kb = InlineKeyboardBuilder()
         for model_id in self.providers.keys():
             self.models_kb.row(InlineKeyboardButton(text=model_id, callback_data=f"setmodel:{model_id}"))
@@ -206,11 +217,13 @@ class LlmBot:
         self.buy_kb = InlineKeyboardBuilder()
         self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WEEK_WITH_STARS, callback_data="buy:stars:xtr_week"))
         self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_MONTH_WITH_STARS, callback_data="buy:stars:xtr_month"))
+        if add_yookassa:
+            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WEEK_WITH_RUB, callback_data="buy:yookassa:rub_week"))
+            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_MONTH_WITH_RUB, callback_data="buy:yookassa:rub_month"))
+        self.buy_kb.adjust(2)
 
-        self.bot = Bot(token=self.config.token, default=DefaultBotProperties(parse_mode=None))
-        self.bot_info: Optional[User] = None
-
-        self.dp = Dispatcher()
+    def build_dispatcher(self) -> Dispatcher:
+        dp = Dispatcher()
         commands: List[Tuple[str, Callable[..., Any]]] = [
             ("start", self.start),
             ("help", self.start),
@@ -238,13 +251,11 @@ class LlmBot:
             ("paysupport", self.pay_support),
         ]
         for command, func in commands:
-            self.dp.message.register(func, Command(command))
-        self.dp.message.register(self.wrong_command, Command(re.compile(r"\S+")))
-        self.dp.message.register(
+            dp.message.register(func, Command(command))
+        dp.message.register(self.wrong_command, Command(re.compile(r"\S+")))
+        dp.message.register(
             self.successful_payment_handler, lambda m: m.content_type == ContentType.SUCCESSFUL_PAYMENT
         )
-        self.dp.message.register(self.generate)
-
         callbacks: List[Tuple[str, Callable[..., Any]]] = [
             ("feedback:", self.save_feedback_handler),
             ("setmodel:", self.set_model_button_handler),
@@ -256,18 +267,10 @@ class LlmBot:
             ("buy:stars", self.stars_sub_buy_proceed),
         ]
         for start, func in callbacks:
-            self.dp.callback_query.register(func, F.data.startswith(start))
-
-        self.dp.pre_checkout_query.register(self.pre_checkout_handler)
-        self.scheduler: Optional[AsyncIOScheduler] = None
-        self.yookassa: Optional[YookassaHandler] = None
-        if yookassa_config_path and os.path.exists(yookassa_config_path):
-            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WEEK_WITH_RUB, callback_data="buy:yookassa:rub_week"))
-            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_MONTH_WITH_RUB, callback_data="buy:yookassa:rub_month"))
-            with open(yookassa_config_path) as r:
-                config = json.load(r)
-                self.yookassa = YookassaHandler(**config)
-        self.buy_kb.adjust(2)
+            dp.callback_query.register(func, F.data.startswith(start))
+        dp.pre_checkout_query.register(self.pre_checkout_handler)
+        dp.message.register(self.generate)
+        return dp
 
     async def start_polling(self) -> None:
         self.scheduler = AsyncIOScheduler(timezone=self.config.timezone)
