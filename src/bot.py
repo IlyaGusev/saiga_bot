@@ -1048,7 +1048,7 @@ class LlmBot:
                 all_messages = history + [{"role": "assistant", "content": answer}]
                 filter_result = await self.llm_filter(all_messages)
                 if filter_result:
-                    answer = "Я не могу обсуждать эту тему, сработал фильтр."
+                    answer = self.localization.MESSAGE_FILTERED
 
             output_chunk_size = self.config.output_chunk_size
             if output_chunk_size is not None:
