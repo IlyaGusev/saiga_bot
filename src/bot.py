@@ -1008,11 +1008,14 @@ class LlmBot:
         if "claude" in model and params["temperature"] > 1.0:
             await message.reply(self.localization.CLAUDE_HIGH_TEMPERATURE)
             return
-        if not isinstance(content, str) and not provider.can_handle_images:
-            await message.reply(self.localization.CONTENT_NOT_SUPPORTED_BY_MODEL)
+        if "o1" in model and (params["temperature"] != 1.0 or params["top_p"] != 1.0 or system_prompt):
+            await message.reply(self.localization.O1_WRONG_PARAMS)
             return
         if content is None:
             await message.reply(self.localization.CONTENT_NOT_SUPPORTED)
+            return
+        if not isinstance(content, str) and not provider.can_handle_images:
+            await message.reply(self.localization.CONTENT_NOT_SUPPORTED_BY_MODEL)
             return
 
         self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)

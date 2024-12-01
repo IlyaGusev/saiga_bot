@@ -78,6 +78,7 @@ class Localization:
     PRIVACY: Template
     FILE_IS_TOO_BIG: str
     MESSAGE_FILTERED: str
+    O1_WRONG_PARAMS: str
 
     @classmethod
     def load(cls, path: str, language: str) -> "Localization":
