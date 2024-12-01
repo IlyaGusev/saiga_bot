@@ -36,6 +36,7 @@ from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
 from src.provider import LLMProvider
+from src.llm_filter import LLMFilter
 from src.decorators import check_admin, check_creator
 from src.localization import Localization
 from src.tools import Tool
@@ -76,10 +77,10 @@ class BotConfig:
     timezone: str = "Europe/Moscow"
     output_chunk_size: int = 3500
     sub_configs: Dict[SubKey, SubConfig] = field(default_factory=lambda: {
-        SubKey.RUB_WEEK: SubConfig(500, "RUB", 7 * 86400),
-        SubKey.RUB_MONTH: SubConfig(2100, "RUB", 31 * 86400),
-        SubKey.XTR_WEEK:  SubConfig(250, "XTR", 7 * 86400),
-        SubKey.XTR_MONTH:  SubConfig(1000, "XTR", 31 * 86400),
+        SubKey.RUB_WEEK: SubConfig(700, "RUB", 7 * 86400),
+        SubKey.RUB_MONTH: SubConfig(2800, "RUB", 31 * 86400),
+        SubKey.XTR_WEEK:  SubConfig(500, "XTR", 7 * 86400),
+        SubKey.XTR_MONTH:  SubConfig(1500, "XTR", 31 * 86400),
     })
 
 
@@ -152,6 +153,10 @@ class LlmBot:
             providers_config = json.load(r)
             for provider_name, config in providers_config.items():
                 self.providers[provider_name] = LLMProvider(provider_name=provider_name, **config)
+
+        self.llm_filter = None
+        if "gpt-4o-mini" in self.providers:
+            self.llm_filter = LLMFilter(self.providers["gpt-4o-mini"])
 
         self.localization = Localization.load(localization_config_path, "ru")
 
@@ -944,11 +949,10 @@ class LlmBot:
         assert message.from_user
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
-        chat_id = user_id
-        is_chat = False
-        if message.chat.type in ("group", "supergroup"):
+        is_chat = message.chat.type in ("group", "supergroup")
+        chat_id = message.chat.id if is_chat else user_id
+        if is_chat:
             chat_id = message.chat.id
-            is_chat = True
             assert self.bot_info
             is_reply = (
                 message.reply_to_message
@@ -963,7 +967,16 @@ class LlmBot:
                 await self._save_chat_message(message)
                 return
 
+        await self._handle_message(message)
+
+    async def _handle_message(self, message: Message, override_content: Optional[str] = None) -> None:
+        assert message.from_user
+        user_id = message.from_user.id
+        user_name = self._get_user_name(message.from_user)
+        is_chat = message.chat.type in ("group", "supergroup")
+        chat_id = message.chat.id if is_chat else user_id
         model = self.db.get_current_model(chat_id)
+
         if model not in self.providers:
             await message.reply(self.localization.MODEL_NOT_SUPPORTED)
             return
@@ -1027,6 +1040,12 @@ class LlmBot:
             if tools and "gpt" not in model:
                 params["tools"] = tools
             answer = await self._query_api(provider=provider, messages=history, system_prompt=system_prompt, **params)
+
+            if is_chat and self.llm_filter:
+                all_messages = history + [{"role": "assistant", "content": answer}]
+                filter_result = await self.llm_filter(all_messages)
+                if filter_result:
+                    answer = "Я не могу обсуждать эту тему, сработал фильтр."
 
             output_chunk_size = self.config.output_chunk_size
             if output_chunk_size is not None:

@@ -11,7 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker, mapped_column, Mapped
 metadata = MetaData()
 
 DEFAULT_SHORT_NAME = "Сайга"
-DEFAULT_MODEL = "saiga-v7"
+DEFAULT_MODEL = "saiga-nemo-12b"
 DEFAULT_PARAMS = {
     "temperature": 0.6,
     "top_p": 0.9,

@@ -46,3 +46,12 @@ class LLMProvider:
         assert "standard" in self.limits
         assert "subscribed" in self.limits
         self.api = AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> str:
+        chat_completion = await self.api.chat.completions.create(
+            *args,
+            model=self.model_name,
+            **kwargs,
+        )
+        response_message: str = chat_completion.choices[0].message.content
+        return response_message
