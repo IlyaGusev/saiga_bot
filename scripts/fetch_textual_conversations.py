@@ -85,9 +85,11 @@ def main(db_path: str, output_path: str, min_timestamp: int = None, fetch_chats:
         if system_prompt:
             messages.insert(0, {"role": "system", "content": system_prompt})
         model_name = model.replace('-', '_')
+        if model_name not in ("gpt_4o", "claude_3_5_sonnet", "o1_mini", "o1_preview", "claude_3_5_sonnet_20241022", "claude_opus", "deepseek_v3", "grok_2"):
+            continue
         records.append({
             "messages": messages,
-            "source": f"saiga_bot_v2_{model_name}",
+            "source": f"saiga_bot_28_02_{model_name}",
             "conv_id": conv_id
         })
 

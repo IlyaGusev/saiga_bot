@@ -35,14 +35,6 @@ class DateTimeTool(Tool):
         }
 
     async def __call__(self, timezone: str) -> str:
-        url = f"https://worldtimeapi.org/api/timezone/{timezone}"
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
-                    result = await resp.json()
-                    wtr = result.get("datetime")
-                    wtr_obj = datetime.strptime(wtr, "%Y-%m-%dT%H:%M:%S.%f%z")
-                    return wtr_obj.strftime("Date: %Y-%m-%d, time: %H:%M:%S")
-        except Exception:
-            return json.dumps({"result": "No result was found"})
+        current_datetime = datetime.now()
+        formatted_datetime = current_datetime.strftime("Date: %Y-%m-%d, Time: %H:%M:%S")
+        return formatted_datetime

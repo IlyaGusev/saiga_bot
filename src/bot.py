@@ -1092,6 +1092,8 @@ class LlmBot:
         conv_id = command.args.strip()
         user_id = self.db.get_user_id_by_conv_id(conv_id)
         history = self.db.fetch_conversation(conv_id)
+        current_user_model = self.db.get_current_model(user_id)
+        print(current_user_model)
         model = list({m["model"] for m in history if m["model"]})[0]
         provider = self.providers[model]
         history = self._prepare_history(history, provider, False)
@@ -1263,8 +1265,6 @@ class LlmBot:
         tokens_count = 0
 
         if "api.openai.com" in url:
-            if "o1" in tokenizer_name:
-                return 0
             encoding = tiktoken.encoding_for_model(tokenizer_name)
             for m in messages:
                 if isinstance(m["content"], str):

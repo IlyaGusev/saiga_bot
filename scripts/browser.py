@@ -11,14 +11,14 @@ from textual.containers import Container
 
 def to_markdown(record):
     result = ""
-    messages = record["messages"]
+    messages = record["messages"][:10]
     for m in messages:
         result += "# {role}\n{content}\n\n".format(role=m["role"], content=m["content"])
     return result
 
 
 def to_meta(record):
-    meta = {k: v for k, v in record.items() if k != "messages"}
+    meta = {k: v for k, v in record.items() if k in ("char_name", "source",)}
     result = []
     for k, v in meta.items():
         result.append(f"{k}={v}")
