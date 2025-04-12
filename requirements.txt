@@ -7,8 +7,8 @@ tiktoken==0.7.0
 yookassa==3.2.0
 apscheduler==3.6.3
 pillow>=11.1.0
-types-requests==2.32.0
-types-pyyaml==6.0.12
+types-requests==2.32.0.20250328
+types-pyyaml==6.0.12.20250402
 dataclasses-json>=0.6.7
 fire>=0.5.0
 pytest-asyncio>=0.26.0

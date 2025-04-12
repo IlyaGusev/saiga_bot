@@ -24,7 +24,7 @@ async def run_agent(
     messages: ChatMessages,
     model: OpenAIServerModel,
     max_print_outputs_length: int = 10000,
-    verbosity_level: int = 2,
+    verbosity_level: int = 0,
     max_steps: int = 5,
     dalle_api_key: Optional[str] = None,
 ) -> MessageContent:
