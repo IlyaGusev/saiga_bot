@@ -1,8 +1,6 @@
-from src.tools.base import Tool
-from src.tools.search import SearchTool
-from src.tools.dalle import DalleTool
-from src.tools.fetch import FetchTool
-from src.tools.datetime import DateTimeTool
-from src.tools.terrarium import TerrariumTool
+from smolagents.default_tools import VisitWebpageTool  # type: ignore
 
-__all__ = ["Tool", "SearchTool", "DalleTool", "FetchTool", "DateTimeTool", "TerrariumTool"]
+from src.tools.search import WebSearchTool
+from src.tools.dalle import DalleTool
+
+__all__ = ["WebSearchTool", "VisitWebpageTool", "DalleTool"]

@@ -1,11 +1,11 @@
 import json
-import pathlib
+from pathlib import Path
 from dataclasses import dataclass
 
-from jinja2 import Template  # type: ignore
+from jinja2 import Template
 
 
-DIR_PATH = pathlib.Path(__file__).parent.resolve()
+DIR_PATH = Path(__file__).parent.resolve()
 ROOT_DIR_PATH = DIR_PATH.parent.resolve()
 TEMPLATES_DIR_PATH = ROOT_DIR_PATH / "templates"
 
@@ -66,9 +66,7 @@ class Localization:
     CREATORS_ONLY: str
     PAYMENT_URL: str
     PAYMENT_CANCEL: str
-    DALLE_LIMIT: str
-    DALLE_PROMPT: str
-    DALLE_ERROR: str
+    DALLE_ANSWER: str
     BUY_WEEK_WITH_STARS: str
     BUY_WEEK_WITH_RUB: str
     BUY_MONTH_WITH_STARS: str
@@ -81,7 +79,7 @@ class Localization:
     O1_WRONG_PARAMS: str
 
     @classmethod
-    def load(cls, path: str, language: str) -> "Localization":
+    def load(cls, path: Path, language: str) -> "Localization":
         with open(path, "r") as r:
             content = json.load(r)
         lang_content = content[language]

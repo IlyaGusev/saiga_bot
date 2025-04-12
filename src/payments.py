@@ -22,7 +22,10 @@ class YookassaHandler:
         payment = Payment.create(
             {
                 "amount": {"value": value, "currency": "RUB"},
-                "confirmation": {"type": "redirect", "return_url": f"https://t.me/{bot_username}"},
+                "confirmation": {
+                    "type": "redirect",
+                    "return_url": f"https://t.me/{bot_username}",
+                },
                 "capture": True,
                 "description": description,
                 "receipt": {

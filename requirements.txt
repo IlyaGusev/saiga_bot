@@ -1,10 +1,15 @@
 aiogram==3.6.0
-openai==1.28.1
+openai== 1.72.0
 sqlalchemy==2.0.15
-transformers==4.38.1
-fire==0.5.0
+transformers==4.51.2
+smolagents==1.12.0
 tiktoken==0.7.0
 yookassa==3.2.0
 apscheduler==3.6.3
-pdfminer.six==20240706
-types-requests
+pillow>=11.1.0
+types-requests==2.32.0
+types-pyyaml==6.0.12
+dataclasses-json>=0.6.7
+fire>=0.5.0
+pytest-asyncio>=0.26.0
+pypdf==5.1.0

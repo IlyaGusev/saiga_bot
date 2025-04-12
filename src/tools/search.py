@@ -1,42 +1,26 @@
-import traceback
-from typing import Optional, Dict, Any
+from typing import Any
 
-from duckduckgo_search import AsyncDDGS  # type: ignore
-
-from src.tools.base import Tool
+from duckduckgo_search import DDGS
+from smolagents import Tool  # type: ignore
 
 
-@Tool.register("search")
-class SearchTool(Tool):
-    def __init__(self, proxy: Optional[str] = None):
-        self.proxy = proxy
+class WebSearchTool(Tool):  # type: ignore
+    name = "web_search"
+    description = """
+    Performs a duckduckgo web search based on your query (think a Google search),
+    then returns the top search results.
+    """
+    inputs = {"query": {"type": "string", "description": "The search query to perform."}}
+    output_type = "string"
 
-    async def __call__(self, query: str) -> str:
-        try:
-            client = AsyncDDGS(proxy=None)
-            results = await client.atext(query, max_results=5, safesearch="off", backend="html", region="ru-ru")
-            snippets = [r["body"] for r in results]
-            context = "\n\n".join(snippets)
-        except Exception:
-            print(traceback.format_exc())
-            context = "Search failed"
-        return context
+    def __init__(self, max_results: int = 10, **kwargs: Any) -> None:
+        super().__init__()
+        self.max_results = max_results
+        self.ddgs = DDGS(**kwargs)
 
-    def get_specification(self) -> Dict[str, Any]:
-        return {
-            "type": "function",
-            "function": {
-                "name": "search",
-                "description": "Use this tool whenever a search query is needed to answer user queries.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Query for search",
-                        },
-                    },
-                    "required": ["query"],
-                },
-            },
-        }
+    def forward(self, query: str) -> str:
+        results = self.ddgs.text(query, max_results=5, safesearch="off", backend="html", region="ru-ru")
+        if len(results) == 0:
+            raise Exception("No results found! Try a less restrictive/shorter query.")
+        postprocessed_results = [f"[{result['title']}]({result['href']})\n{result['body']}" for result in results]
+        return "## Search Results\n\n" + "\n\n".join(postprocessed_results)

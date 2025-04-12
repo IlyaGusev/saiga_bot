@@ -17,9 +17,7 @@ def main(db_path, output_path):
                 has_image = True
         if not has_image:
             continue
-        records.append({
-            "messages": messages
-        })
+        records.append({"messages": messages})
 
     with open(output_path, "w") as w:
         for record in records:

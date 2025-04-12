@@ -1,14 +1,18 @@
 import io
 import csv
 import traceback
-from typing import cast, Optional, BinaryIO
+from typing import Optional, BinaryIO
 
-from pdfminer.high_level import extract_text as pdf_extract_text
+from pypdf import PdfReader
 
 
 class DocumentLoader:
     def __init__(self) -> None:
-        self.parsers = {".csv": self.parse_csv, ".txt": self.parse_txt, ".pdf": self.parse_pdf}
+        self.parsers = {
+            ".csv": self.parse_csv,
+            ".txt": self.parse_txt,
+            ".pdf": self.parse_pdf,
+        }
 
     def load(self, stream: BinaryIO, file_ext: str) -> Optional[str]:
         handler = self.parsers.get(file_ext)
@@ -40,4 +44,14 @@ class DocumentLoader:
         return wrapper.read()
 
     def parse_pdf(self, stream: BinaryIO) -> Optional[str]:
-        return pdf_extract_text(cast(io.IOBase, stream))
+        # Why not Marker? Because it is too heavy.
+        reader = PdfReader(stream)
+        pages = []
+        for page_number, page in enumerate(reader.pages, start=1):
+            try:
+                text = page.extract_text()
+                prefix = f"## Page {page_number}\n\n"
+                pages.append(prefix + text)
+            except Exception:
+                continue
+        return "\n\n".join(pages)

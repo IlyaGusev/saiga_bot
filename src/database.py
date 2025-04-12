@@ -1,6 +1,5 @@
 import secrets
 import json
-import copy
 from typing import Optional, List, Any, Dict, Union
 from datetime import datetime, timezone
 
@@ -141,7 +140,15 @@ class Database:
             obj = session.query(Email).filter(Email.user_id == user_id).first()
             return obj.email if obj else None
 
-    def save_payment(self, payment_id: str, user_id: int, chat_id: int, status: str, url: str, timestamp: int) -> None:
+    def save_payment(
+        self,
+        payment_id: str,
+        user_id: int,
+        chat_id: int,
+        status: str,
+        url: str,
+        timestamp: int,
+    ) -> None:
         with self.Session() as session:
             new_payment = Payment(
                 payment_id=payment_id,
@@ -286,7 +293,11 @@ class Database:
                 params.generation_parameters = json.dumps(generation_parameters)
             else:
                 session.add(
-                    ModelParameters(user_id=user_id, model=current_model, generation_parameters=json.dumps(params))
+                    ModelParameters(
+                        user_id=user_id,
+                        model=current_model,
+                        generation_parameters=json.dumps(params),
+                    )
                 )
             session.commit()
 

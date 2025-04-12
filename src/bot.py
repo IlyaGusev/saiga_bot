@@ -1,18 +1,15 @@
 import asyncio
 import os
+import re
 import json
 import copy
 import traceback
 import base64
-import io
-import re
+from pathlib import Path
 from email.utils import parseaddr
-from enum import Enum
-from typing import cast, List, Dict, Any, Optional, Union, Callable, Coroutine, Tuple, BinaryIO
-from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Union, Callable, Tuple, BinaryIO
 
 import fire  # type: ignore
-import tiktoken
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ChatMemberStatus
@@ -21,73 +18,34 @@ from aiogram.types import (
     Message,
     InlineKeyboardButton,
     CallbackQuery,
-    BufferedInputFile,
     User,
     ContentType,
     PreCheckoutQuery,
     LabeledPrice,
     SuccessfulPayment,
+    BufferedInputFile,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
-from openai import AsyncOpenAI
-from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
-from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
+from src.configs import SubKey, BotConfig, ProvidersConfig, CharactersConfig
 from src.provider import LLMProvider
+from src.agents import run_agent
 from src.llm_filter import LLMFilter
 from src.decorators import check_admin, check_creator
 from src.localization import Localization
-from src.tools import Tool
 from src.database import Database
 from src.payments import YookassaHandler, YookassaStatus
-from src.tokenizers import Tokenizers
 from src.document_loader import DocumentLoader
-
-
-DALLE_DAILY_LIMIT = 5
-IMAGE_PLACEHOLDER = "<image_placeholder>"
-
-ChatMessage = Dict[str, Any]
-ChatMessages = List[ChatMessage]
-
-@dataclass
-class SubConfig:
-    price: int = 500
-    currency: str = "RUB"
-    duration: int = 7 * 86400
-
-
-class SubKey(str, Enum):
-    RUB_WEEK = "rub_week"
-    RUB_MONTH = "rub_month"
-    XTR_WEEK = "xtr_week"
-    XTR_MONTH = "xtr_month"
-
-
-@dataclass
-class BotConfig:
-    token: str
-    admin_user_name: str
-    admin_user_id: int
-    temperature_range: List[float]
-    top_p_range: List[float]
-    freq_penalty_range: List[float] = field(default_factory=lambda: [0.0, 0.05, 0.1, 0.2, 0.5, 1.0])
-    timezone: str = "Europe/Moscow"
-    output_chunk_size: int = 3500
-    sub_configs: Dict[SubKey, SubConfig] = field(default_factory=lambda: {
-        SubKey.RUB_WEEK: SubConfig(700, "RUB", 7 * 86400),
-        SubKey.RUB_MONTH: SubConfig(2800, "RUB", 31 * 86400),
-        SubKey.XTR_WEEK:  SubConfig(500, "XTR", 7 * 86400),
-        SubKey.XTR_MONTH:  SubConfig(1500, "XTR", 31 * 86400),
-    })
-
-
-def _crop_content(content: str) -> str:
-    if isinstance(content, str):
-        return content.replace("\n", " ")[:40]
-    return IMAGE_PLACEHOLDER
+from src.messages import (
+    ChatMessages,
+    MessageContent,
+    replace_images,
+    merge_messages,
+    crop_content,
+    build_image_content,
+)
 
 
 def _split_message(text: str, output_chunk_size: int) -> List[str]:
@@ -98,7 +56,7 @@ def _split_message(text: str, output_chunk_size: int) -> List[str]:
     paragraphs = text.split("\n\n")
     for paragraph in paragraphs:
         if chunks and len(chunks[-1]) + len(paragraph) + 2 <= output_chunk_size:
-            chunks[-1] += '\n\n' + paragraph
+            chunks[-1] += "\n\n" + paragraph
         else:
             chunks.append(paragraph)
 
@@ -136,44 +94,36 @@ async def _edit_text(message: Message, text: str, **kwargs: Any) -> Union[Messag
 class LlmBot:
     def __init__(
         self,
-        providers_config_path: str,
-        db_path: str,
-        bot_config_path: str,
-        localization_config_path: str,
-        characters_path: Optional[str],
-        tools_config_path: Optional[str],
-        yookassa_config_path: Optional[str],
+        providers_config_path: Path,
+        db_path: Path,
+        bot_config_path: Path,
+        localization_config_path: Path,
+        characters_path: Optional[Path] = None,
+        yookassa_config_path: Optional[Path] = None,
     ):
-        assert os.path.exists(bot_config_path)
-        with open(bot_config_path) as r:
-            self.config = BotConfig(**json.load(r))
+        assert bot_config_path.exists()
+        assert providers_config_path.exists()
+        assert localization_config_path.exists()
+        assert db_path.exists()
+        assert yookassa_config_path is None or yookassa_config_path.exists()
+        assert characters_path is None or characters_path.exists()
+
+        self.config = BotConfig.from_json(bot_config_path.read_text())
 
         self.providers: Dict[str, LLMProvider] = dict()
-        with open(providers_config_path) as r:
-            providers_config = json.load(r)
-            for provider_name, config in providers_config.items():
-                self.providers[provider_name] = LLMProvider(provider_name=provider_name, **config)
+        providers_config = ProvidersConfig.from_json(providers_config_path.read_text())
+        for provider_name, config in providers_config.providers.items():
+            self.providers[provider_name] = LLMProvider(provider_name=provider_name, config=config)
 
-        self.llm_filter = None
-        if "gpt-4o-mini" in self.providers:
-            self.llm_filter = LLMFilter(self.providers["gpt-4o-mini"])
+        assert "gpt-4o-mini" in self.providers
+        self.llm_filter = LLMFilter(self.providers["gpt-4o-mini"])
 
         self.localization = Localization.load(localization_config_path, "ru")
-
-        self.tools: Dict[str, Tool] = dict()
-        if tools_config_path:
-            assert os.path.exists(tools_config_path)
-            with open(tools_config_path) as r:
-                tools_config = json.load(r)
-                for tool_name, tool_config in tools_config.items():
-                    self.tools[tool_name] = Tool.by_name(tool_name)(**tool_config)
-
         self.characters = dict()
-        if characters_path and os.path.exists(characters_path):
-            with open(characters_path) as r:
-                self.characters = json.load(r)
+        if characters_path:
+            self.characters = CharactersConfig.from_json(characters_path.read_text()).characters
 
-        self.db = Database(db_path)
+        self.db = Database(str(db_path))
         self.dp = self.build_dispatcher()
         self.document_loader = DocumentLoader()
         self.bot = Bot(token=self.config.token, default=DefaultBotProperties(parse_mode=None))
@@ -183,8 +133,7 @@ class LlmBot:
         self.yookassa: Optional[YookassaHandler] = None
         if yookassa_config_path and os.path.exists(yookassa_config_path):
             with open(yookassa_config_path) as r:
-                config = json.load(r)
-                self.yookassa = YookassaHandler(**config)
+                self.yookassa = YookassaHandler(**json.load(r))
         self.build_menus(add_yookassa=self.yookassa is not None)
 
     def build_menus(self, add_yookassa: bool = False) -> None:
@@ -215,11 +164,31 @@ class LlmBot:
             self.freq_penalty_kb.add(InlineKeyboardButton(text=str(value), callback_data=f"setfreqpenalty:{value}"))
 
         self.buy_kb = InlineKeyboardBuilder()
-        self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WEEK_WITH_STARS, callback_data="buy:stars:xtr_week"))
-        self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_MONTH_WITH_STARS, callback_data="buy:stars:xtr_month"))
+        self.buy_kb.add(
+            InlineKeyboardButton(
+                text=self.localization.BUY_WEEK_WITH_STARS,
+                callback_data="buy:stars:xtr_week",
+            )
+        )
+        self.buy_kb.add(
+            InlineKeyboardButton(
+                text=self.localization.BUY_MONTH_WITH_STARS,
+                callback_data="buy:stars:xtr_month",
+            )
+        )
         if add_yookassa:
-            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_WEEK_WITH_RUB, callback_data="buy:yookassa:rub_week"))
-            self.buy_kb.add(InlineKeyboardButton(text=self.localization.BUY_MONTH_WITH_RUB, callback_data="buy:yookassa:rub_month"))
+            self.buy_kb.add(
+                InlineKeyboardButton(
+                    text=self.localization.BUY_WEEK_WITH_RUB,
+                    callback_data="buy:yookassa:rub_week",
+                )
+            )
+            self.buy_kb.add(
+                InlineKeyboardButton(
+                    text=self.localization.BUY_MONTH_WITH_RUB,
+                    callback_data="buy:yookassa:rub_month",
+                )
+            )
         self.buy_kb.adjust(2)
 
     def build_dispatcher(self) -> Dispatcher:
@@ -254,7 +223,8 @@ class LlmBot:
             dp.message.register(func, Command(command))
         dp.message.register(self.wrong_command, Command(re.compile(r"\S+")))
         dp.message.register(
-            self.successful_payment_handler, lambda m: m.content_type == ContentType.SUCCESSFUL_PAYMENT
+            self.successful_payment_handler,
+            lambda m: m.content_type == ContentType.SUCCESSFUL_PAYMENT,
         )
         callbacks: List[Tuple[str, Callable[..., Any]]] = [
             ("feedback:", self.save_feedback_handler),
@@ -292,7 +262,7 @@ class LlmBot:
         user_id = message.from_user.id
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
         mode = "standard" if self.db.get_subscription_info(user_id) <= 0 else "subscribed"
-        limits = {name: provider.limits for name, provider in self.providers.items()}
+        limits = {name: provider.config.limits for name, provider in self.providers.items()}
         sub_limits = self.localization.LIMITS.render(limits=limits, mode=mode).strip()
         content = self.localization.HELP.render(
             model=model,
@@ -325,18 +295,21 @@ class LlmBot:
         await message.reply(self.localization.RESET)
 
     async def history(self, message: Message) -> None:
-        chat_id = message.chat.id
         assert message.from_user
+        assert message.chat
+
+        chat_id = message.chat.id
         is_chat = chat_id != message.from_user.id
+
         conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
         model = self.db.get_current_model(chat_id)
         provider = self.providers[model]
         message_text = self.localization.NO_HISTORY
         if history:
-            history = self._replace_images(history)
-            history = self._prepare_history(history, provider, is_chat)
-            tokens_count = self._count_tokens(history, provider)
+            history = replace_images(history)
+            history = provider.prepare_history(history, is_chat)
+            tokens_count = provider.count_tokens(history)
             plain_history = json.dumps(history, ensure_ascii=False)
             plain_history = self._truncate_text(plain_history)
             message_text = self.localization.HISTORY.format(tokens_count=tokens_count, history=plain_history)
@@ -351,73 +324,6 @@ class LlmBot:
         if content is not None:
             conv_id = self.db.get_current_conv_id(chat_id)
             self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
-
-    @staticmethod
-    def _format_chat(messages: ChatMessages) -> ChatMessages:
-        for m in messages:
-            content = m["content"]
-            role = m["role"]
-            if role == "user" and content is None:
-                continue
-            if role == "user" and isinstance(content, str) and m["user_name"]:
-                m["content"] = "Из чата пишет {}: {}".format(m["user_name"], content)
-        return messages
-
-    def _prepare_history(self, history: ChatMessages, provider: LLMProvider, is_chat: bool = False) -> ChatMessages:
-        if is_chat:
-            history = self._format_chat(history)
-        assert history
-        save_keys = ("content", "role", "tool_calls", "tool_call_id", "name")
-        history = [{k: m[k] for k in save_keys if m.get(k) is not None or k == "content"} for m in history]
-        history = [m for m in history if not self._is_image_content(m["content"]) or provider.can_handle_images]
-        assert history
-        history = [
-            m for m in history if ("tool_calls" not in m and "tool_call_id" not in m) or provider.can_handle_tools
-        ]
-        assert history
-        history = self._merge_messages(history)
-        assert history
-        tokens_count = self._count_tokens(history, provider)
-        while tokens_count > provider.history_max_tokens and len(history) >= 3:
-            history = history[2:]
-            tokens_count = self._count_tokens(history, provider)
-        last_message = history[-1]["content"]
-        if tokens_count > provider.history_max_tokens and isinstance(last_message, str):
-            estimated_char_count = provider.history_max_tokens * 2
-            if len(last_message) > estimated_char_count:
-                history[-1]["content"] = "<truncated text>\n\n" + last_message[-estimated_char_count:]
-        assert history
-        return history
-
-    @staticmethod
-    def _merge_messages(messages: ChatMessages) -> ChatMessages:
-        new_messages: ChatMessages = []
-        prev_role = None
-        for m in messages:
-            content = m["content"]
-            role = m["role"]
-            if role == prev_role and role != "tool":
-                is_current_str = isinstance(content, str)
-                is_current_list = isinstance(content, list)
-                prev_content = new_messages[-1]["content"]
-                is_prev_str = isinstance(prev_content, str)
-                is_prev_list = isinstance(prev_content, list)
-                if is_current_str and is_prev_str:
-                    new_messages[-1]["content"] += "\n\n" + content
-                    continue
-                elif is_current_str and is_prev_list:
-                    prev_content.append({"type": "text", "text": content})
-                    continue
-                elif is_prev_str and is_current_list:
-                    content.insert(0, {"type": "text", "text": prev_content})
-                    new_messages[-1]["content"] = content
-                    continue
-                elif is_current_list and is_prev_list:
-                    prev_content.extend(content)
-                    continue
-            prev_role = role
-            new_messages.append(m)
-        return new_messages
 
     #
     # Model selection
@@ -465,8 +371,9 @@ class LlmBot:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
         prompt = self.db.get_system_prompt(chat_id)
+        provider = self.providers[model]
         if prompt is None:
-            prompt = self.providers[model].system_prompt
+            prompt = provider.config.system_prompt
         if not prompt.strip():
             prompt = self.localization.EMPTY_SYSTEM_PROMPT
         await message.reply(prompt)
@@ -475,7 +382,8 @@ class LlmBot:
     async def reset_system(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
-        self.db.set_system_prompt(chat_id, self.providers[model].system_prompt)
+        provider = self.providers[model]
+        self.db.set_system_prompt(chat_id, provider.config.system_prompt)
         self.db.create_conv_id(chat_id)
         await message.reply(self.localization.RESET_SYSTEM_PROMPT)
 
@@ -508,7 +416,10 @@ class LlmBot:
 
     @check_admin
     async def set_character(self, message: Message) -> None:
-        await message.reply(self.localization.CHOOSE_CHARACTER, reply_markup=self.characters_kb.as_markup())
+        await message.reply(
+            self.localization.CHOOSE_CHARACTER,
+            reply_markup=self.characters_kb.as_markup(),
+        )
 
     @check_admin
     async def set_character_button_handler(self, callback: CallbackQuery) -> None:
@@ -518,8 +429,8 @@ class LlmBot:
         char_name = callback.data.split(":")[1]
         assert char_name in self.characters
         character = self.characters[char_name]
-        system_prompt = character["system_prompt"]
-        short_name = character["short_name"]
+        system_prompt = character.system_prompt
+        short_name = character.short_name
         self.db.set_system_prompt(chat_id, system_prompt)
         self.db.set_short_name(chat_id, short_name)
         self.db.create_conv_id(chat_id)
@@ -536,8 +447,8 @@ class LlmBot:
         is_subscribed = self.db.is_subscribed_user(user_id)
         mode = "standard" if not is_subscribed else "subscribed"
         provider = self.providers[model]
-        limit = int(provider.limits[mode]["limit"])
-        interval = provider.limits[mode]["interval"]
+        limit = int(provider.config.limits[mode]["limit"])
+        interval = provider.config.limits[mode]["interval"]
         count = int(self.db.count_user_messages(user_id, model, interval))
         remaining_count = limit - count
         return max(0, remaining_count)
@@ -581,14 +492,18 @@ class LlmBot:
             await message.reply(self.localization.ACTIVE_SUB.format(remaining_hours=remaining_seconds // 3600))
             return
 
-        limits = {name: provider.limits for name, provider in self.providers.items()}
+        limits = {name: provider.config.limits for name, provider in self.providers.items()}
         sub_limits = self.localization.LIMITS.render(limits=limits, mode="subscribed").strip()
         description = self.localization.SUB_DESCRIPTION.render(
             sub_limits=sub_limits,
             price_week=self.config.sub_configs[SubKey.RUB_WEEK].price,
             price_month=self.config.sub_configs[SubKey.RUB_MONTH].price,
         )
-        await message.reply(description, parse_mode=ParseMode.MARKDOWN, reply_markup=self.buy_kb.as_markup())
+        await message.reply(
+            description,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=self.buy_kb.as_markup(),
+        )
 
     async def stars_sub_buy_proceed(self, callback: CallbackQuery) -> None:
         assert callback.from_user
@@ -617,7 +532,7 @@ class LlmBot:
         }
         key_to_title = {
             SubKey.XTR_WEEK: self.localization.SUB_WEEK_TITLE,
-            SubKey.XTR_MONTH: self.localization.SUB_MONTH_TITLE
+            SubKey.XTR_MONTH: self.localization.SUB_MONTH_TITLE,
         }
         title = key_to_short_title[key]
         description = key_to_title[key].format(user_id=user_id)
@@ -687,19 +602,22 @@ class LlmBot:
         sub = self.config.sub_configs[key]
         key_to_title = {
             SubKey.RUB_WEEK: self.localization.SUB_WEEK_TITLE,
-            SubKey.RUB_MONTH: self.localization.SUB_MONTH_TITLE
+            SubKey.RUB_MONTH: self.localization.SUB_MONTH_TITLE,
         }
         title = key_to_title[key].format(user_id=user_id)
-        payment_data = self.yookassa.create_payment(
-            sub.price, title, email=email, bot_username=self.bot_info.username
-        )
+        payment_data = self.yookassa.create_payment(sub.price, title, email=email, bot_username=self.bot_info.username)
         payment_id = payment_data["id"]
         timestamp = self.db.get_current_ts()
         try:
             url = payment_data["confirmation"]["confirmation_url"]
             status = payment_data["status"]
             self.db.save_payment(
-                payment_id=payment_id, user_id=user_id, chat_id=chat_id, url=url, status=status, timestamp=timestamp
+                payment_id=payment_id,
+                user_id=user_id,
+                chat_id=chat_id,
+                url=url,
+                status=status,
+                timestamp=timestamp,
             )
             await callback.message.reply(self.localization.PAYMENT_URL.format(url=url))
         except Exception:
@@ -713,7 +631,9 @@ class LlmBot:
         for payment in payments:
             status = self.yookassa.check_payment(payment.payment_id)
             self.db.set_payment_status(
-                payment_id=payment.payment_id, status=status, internal_status=payment.internal_status
+                payment_id=payment.payment_id,
+                status=status,
+                internal_status=payment.internal_status,
             )
             if status == YookassaStatus.SUCCEEDED:
                 sub_key = SubKey(self.yookassa.get_sub_key(payment.payment_id))
@@ -741,7 +661,10 @@ class LlmBot:
 
     @check_admin
     async def set_temperature(self, message: Message) -> None:
-        await message.reply(self.localization.SELECT_TEMPERATURE, reply_markup=self.temperature_kb.as_markup())
+        await message.reply(
+            self.localization.SELECT_TEMPERATURE,
+            reply_markup=self.temperature_kb.as_markup(),
+        )
 
     @check_admin
     async def set_temperature_button_handler(self, callback: CallbackQuery) -> None:
@@ -752,7 +675,7 @@ class LlmBot:
         provider = self.providers[model]
         temperature = float(callback.data.split(":")[1])
         params = self.db.get_parameters(chat_id)
-        params = copy.deepcopy(provider.params) if params is None else params
+        params = copy.deepcopy(provider.config.params) if params is None else params
         params["temperature"] = temperature
         self.db.set_parameters(chat_id, **params)
         assert isinstance(callback.message, Message)
@@ -771,7 +694,7 @@ class LlmBot:
         provider = self.providers[model]
         top_p = float(callback.data.split(":")[1])
         params = self.db.get_parameters(chat_id)
-        params = provider.params if params is None else params
+        params = provider.config.params if params is None else params
         params["top_p"] = top_p
         self.db.set_parameters(chat_id, **params)
         assert isinstance(callback.message, Message)
@@ -779,7 +702,10 @@ class LlmBot:
 
     @check_admin
     async def set_frequency_penalty(self, message: Message) -> None:
-        await message.reply(self.localization.SELECT_FREQUENCY_PENALTY, reply_markup=self.freq_penalty_kb.as_markup())
+        await message.reply(
+            self.localization.SELECT_FREQUENCY_PENALTY,
+            reply_markup=self.freq_penalty_kb.as_markup(),
+        )
 
     @check_admin
     async def set_frequency_penalty_button_handler(self, callback: CallbackQuery) -> None:
@@ -790,7 +716,7 @@ class LlmBot:
         provider = self.providers[model]
         frequency_penalty = float(callback.data.split(":")[1])
         params = self.db.get_parameters(chat_id)
-        params = provider.params if params is None else params
+        params = provider.config.params if params is None else params
         params["frequency_penalty"] = frequency_penalty
         self.db.set_parameters(chat_id, **params)
         assert isinstance(callback.message, Message)
@@ -803,7 +729,7 @@ class LlmBot:
         model = self.db.get_current_model(chat_id)
         provider = self.providers[model]
         params = self.db.get_parameters(chat_id)
-        params = provider.params if params is None else params
+        params = provider.config.params if params is None else params
         params_str = json.dumps(params)
         await message.reply(self.localization.CURRENT_PARAMS.format(params=params_str))
 
@@ -811,19 +737,12 @@ class LlmBot:
     # Tools
     #
 
-    def _get_tools(self, chat_id: int) -> Optional[List[Dict[str, Any]]]:
-        model = self.db.get_current_model(chat_id)
-        provider = self.providers[model]
-        if provider.can_handle_tools and self.tools and self.db.are_tools_enabled(chat_id):
-            return [t.get_specification() for t in self.tools.values()]
-        return None
-
     @check_admin
     async def toogle_tools(self, message: Message) -> None:
         chat_id = message.chat.id
         model = self.db.get_current_model(chat_id)
         provider = self.providers[model]
-        if not provider.can_handle_tools:
+        if not provider.can_handle_tools():
             await message.reply(self.localization.TOOLS_NOT_SUPPORTED_BY_MODEL.format(model=model))
             return
         current_value = self.db.are_tools_enabled(chat_id)
@@ -834,116 +753,6 @@ class LlmBot:
         else:
             await message.reply(self.localization.DISABLED_TOOLS)
 
-    async def _check_tools(self, messages: ChatMessages, model: str) -> Any:
-        messages = copy.deepcopy(messages)
-        messages = self._replace_images(messages)
-        messages = self._fix_broken_tool_calls(messages)
-        tools = [t.get_specification() for t in self.tools.values()]
-        casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
-        casted_tools = [cast(ChatCompletionToolParam, tool) for tool in tools]
-        chat_completion = await self.providers[model].api.chat.completions.create(
-            model=self.providers[model].model_name,
-            messages=casted_messages,
-            tools=casted_tools,
-            tool_choice="auto",
-            max_tokens=2048,
-        )
-        response_message = chat_completion.choices[0].message
-        return response_message
-
-    async def _call_dalle(self, conv_id: str, user_id: int, chat_id: int, placeholder: Message, **kwargs: Any) -> None:
-        dalle_count = self.db.count_generated_images(user_id, 86400)
-        is_dalle_remaining = DALLE_DAILY_LIMIT - dalle_count > 0
-        if not is_dalle_remaining:
-            await placeholder.edit_text(self.localization.DALLE_LIMIT)
-            return
-
-        displayed_prompt = kwargs["prompt_russian"]
-        await placeholder.edit_text(self.localization.DALLE_PROMPT.format(displayed_prompt=displayed_prompt))
-        function_response = await self.tools["dalle"](**kwargs)
-        if not isinstance(function_response, list) or "image_url" not in function_response[1]:
-            text = self.localization.DALLE_ERROR.format(error=function_response)
-            new_message = await self.bot.send_message(
-                chat_id=chat_id, reply_to_message_id=placeholder.message_id, text=text
-            )
-            self.db.save_assistant_message(
-                content=text,
-                conv_id=conv_id,
-                message_id=new_message.message_id,
-                model="dalle",
-                reply_user_id=user_id,
-            )
-            return
-        image_url: Any = function_response[1]["image_url"]
-        base64_image = image_url["url"].split(",")[-1]
-        image_data = base64.b64decode(base64_image)
-        input_file = BufferedInputFile(image_data, filename="image.jpeg")
-        new_message = await self.bot.send_photo(
-            chat_id=chat_id, photo=input_file, reply_to_message_id=placeholder.message_id
-        )
-        self.db.save_assistant_message(
-            content=function_response,
-            conv_id=conv_id,
-            message_id=new_message.message_id,
-            model="dalle",
-            reply_user_id=user_id,
-        )
-
-    async def _call_tools(
-        self, history: ChatMessages, model: str, conv_id: str, user_id: int, chat_id: int, placeholder: Message
-    ) -> Optional[ChatMessages]:
-        response_message = await self._check_tools(history, model=model)
-        tool_calls = response_message.tool_calls
-        if not tool_calls:
-            return history
-
-        tool_calls_dict = [c.to_dict() for c in tool_calls]
-        response_message = {"content": None, "role": "assistant", "tool_calls": tool_calls_dict}
-        history.append(response_message)
-        self.db.save_tool_calls_message(conv_id=conv_id, model=model, tool_calls=tool_calls_dict)
-
-        for tool_call in tool_calls:
-            function_name = tool_call.function.name
-            function_to_call = self.tools[function_name]
-            print(function_name, "call", tool_call.function.arguments)
-
-            function_response: Union[str, List[Dict[str, Any]], None] = None
-            try:
-                function_args = json.loads(tool_call.function.arguments)
-            except json.decoder.JSONDecodeError:
-                function_response = "No response from the tool, try again"
-                print(f"Malformed tool arguments: {tool_call.function.arguments}")
-
-            if function_response is None and function_name == "dalle":
-                await self._call_dalle(
-                    chat_id=chat_id, user_id=user_id, conv_id=conv_id, placeholder=placeholder, **function_args
-                )
-                return None
-
-            if function_response is None:
-                try:
-                    function_response = await function_to_call(**function_args)
-                except Exception as e:
-                    function_response = f"Tool call error: {str(e)}"
-
-            assert function_response is not None
-            history.append(
-                {
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": function_response,
-                }
-            )
-            self.db.save_tool_answer_message(
-                tool_call_id=tool_call.id,
-                content=function_response,
-                conv_id=conv_id,
-                model=model,
-                name=function_name,
-            )
-        return history
-
     #
     # Text generation
     #
@@ -951,7 +760,6 @@ class LlmBot:
     async def generate(self, message: Message) -> None:
         assert message.from_user
         user_id = message.from_user.id
-        user_name = self._get_user_name(message.from_user)
         is_chat = message.chat.type in ("group", "supergroup")
         chat_id = message.chat.id if is_chat else user_id
         if is_chat:
@@ -972,7 +780,7 @@ class LlmBot:
 
         await self._handle_message(message)
 
-    async def _handle_message(self, message: Message, override_content: Optional[str] = None) -> None:
+    async def _handle_message(self, message: Message) -> None:
         assert message.from_user
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
@@ -999,10 +807,9 @@ class LlmBot:
         conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
         params = self.db.get_parameters(chat_id)
-        params = provider.params if params is None else params
+        params = provider.config.params if params is None else params
         params = copy.deepcopy(params)
         system_prompt = self.db.get_system_prompt(chat_id)
-        system_prompt = provider.system_prompt if system_prompt is None else system_prompt
         content = await self._build_content(message)
 
         if "claude" in model and params["temperature"] > 1.0:
@@ -1014,38 +821,26 @@ class LlmBot:
         if content is None:
             await message.reply(self.localization.CONTENT_NOT_SUPPORTED)
             return
-        if not isinstance(content, str) and not provider.can_handle_images:
+        if not isinstance(content, str) and not provider.can_handle_images():
             await message.reply(self.localization.CONTENT_NOT_SUPPORTED_BY_MODEL)
             return
 
         self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
-
         history = history + [{"role": "user", "content": content, "user_name": user_name}]
-        history = self._prepare_history(history, provider, is_chat)
+        history = provider.prepare_history(history, is_chat)
 
         placeholder = await message.reply("💬")
 
         try:
-            tools = self._get_tools(chat_id)
-            if tools:
-                response = await self._call_tools(
-                    history=history,
-                    model=model,
-                    user_id=user_id,
-                    conv_id=conv_id,
-                    chat_id=chat_id,
-                    placeholder=placeholder,
-                )
-                if response is None:
-                    return
-                history = response
-
-            history = self._fix_image_roles(history)
-            history = self._fix_broken_tool_calls(history)
-            history = self._merge_messages(history)
-            if tools and "gpt" not in model:
-                params["tools"] = tools
-            answer = await self._query_api(provider=provider, messages=history, system_prompt=system_prompt, **params)
+            use_agent = self.db.are_tools_enabled(chat_id)
+            answer: MessageContent = await self._query_api(
+                provider=provider,
+                messages=history,
+                system_prompt=system_prompt,
+                use_agent=use_agent,
+                **params,
+            )
+            assert isinstance(answer, list)
 
             if is_chat and self.llm_filter:
                 all_messages = history + [{"role": "assistant", "content": answer}]
@@ -1053,33 +848,58 @@ class LlmBot:
                 if filter_result:
                     answer = self.localization.MESSAGE_FILTERED
 
-            output_chunk_size = self.config.output_chunk_size
-            if output_chunk_size is not None:
-                answer_parts = _split_message(answer, output_chunk_size=output_chunk_size)
-            else:
-                answer_parts = [answer]
+            if isinstance(answer, list) and len(answer) > 1:
+                await placeholder.edit_text(self.localization.DALLE_ANSWER)
+                image_url = answer[1]["image_url"]
+                base64_image = image_url["url"].split(",")[-1]
+                image_data = base64.b64decode(base64_image)
+                input_file = BufferedInputFile(image_data, filename="image.jpeg")
+                photo_message = await self.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=input_file,
+                    reply_to_message_id=placeholder.message_id,
+                )
+                self.db.save_assistant_message(
+                    content=answer,
+                    conv_id=conv_id,
+                    message_id=photo_message.message_id,
+                    model="dalle",
+                    reply_user_id=user_id,
+                )
+                return
 
-            new_message = await _edit_text(placeholder, answer_parts[0])
-            assert isinstance(new_message, Message)
-            for part in answer_parts[1:]:
-                new_message = await _reply(message, part)
+            answer_str: Optional[str] = None
+            if isinstance(answer, list) and len(answer) == 1 and answer[0]["type"] == "text":
+                answer_str = answer[0]["text"]
+
+            if answer_str:
+                output_chunk_size = self.config.output_chunk_size
+                if output_chunk_size is not None:
+                    answer_parts = _split_message(answer_str, output_chunk_size=output_chunk_size)
+                else:
+                    answer_parts = [answer_str]
+
+                new_message: Union[Message, bool] = await _edit_text(placeholder, answer_parts[0])
                 assert isinstance(new_message, Message)
+                for part in answer_parts[1:]:
+                    new_message = await _reply(message, part)
+                    assert isinstance(new_message, Message)
 
-            markup = self.likes_kb.as_markup()
-            new_message = await _edit_text(
-                new_message,
-                answer_parts[-1],
-                reply_markup=markup,
-            )
-            assert isinstance(new_message, Message)
-            self.db.save_assistant_message(
-                content=answer,
-                conv_id=conv_id,
-                message_id=new_message.message_id,
-                model=model,
-                system_prompt=system_prompt,
-                reply_user_id=user_id,
-            )
+                markup = self.likes_kb.as_markup()
+                new_message = await _edit_text(
+                    new_message,
+                    answer_parts[-1],
+                    reply_markup=markup,
+                )
+                assert isinstance(new_message, Message)
+                self.db.save_assistant_message(
+                    content=answer,
+                    conv_id=conv_id,
+                    message_id=new_message.message_id,
+                    model=model,
+                    system_prompt=system_prompt,
+                    reply_user_id=user_id,
+                )
 
         except Exception:
             traceback.print_exc()
@@ -1096,71 +916,66 @@ class LlmBot:
         print(current_user_model)
         model = list({m["model"] for m in history if m["model"]})[0]
         provider = self.providers[model]
-        history = self._prepare_history(history, provider, False)
+        history = provider.prepare_history(history, False)
         params = self.db.get_parameters(user_id)
-        params = provider.params if params is None else params
+        params = provider.config.params if params is None else params
         params = copy.deepcopy(params)
         system_prompt = self.db.get_system_prompt(user_id)
-        system_prompt = provider.system_prompt if system_prompt is None else system_prompt
         placeholder = await message.reply("💬")
-        history = self._fix_image_roles(history)
-        history = self._fix_broken_tool_calls(history)
-        history = self._merge_messages(history)
+        history = merge_messages(history)
         if history[-1]["role"] == "assistant":
             history.pop()
         answer = await self._query_api(provider=provider, messages=history, system_prompt=system_prompt, **params)
-        await placeholder.edit_text(answer[: self.config.output_chunk_size])
+        answer_str = answer if isinstance(answer, str) else answer[0]["text"]
+        await placeholder.edit_text(answer_str[: self.config.output_chunk_size])
 
-    @staticmethod
     async def _query_api(
+        self,
         provider: LLMProvider,
         messages: ChatMessages,
-        system_prompt: str,
+        system_prompt: Optional[str] = None,
         num_retries: int = 2,
-        **kwargs: Any
-    ) -> str:
+        use_agent: bool = False,
+        **kwargs: Any,
+    ) -> MessageContent:
         assert messages
-        if messages[0]["role"] != "system" and system_prompt.strip():
-            messages.insert(0, {"role": "system", "content": system_prompt})
-
-        if provider.merge_system and messages[0]["role"] == "system":
-            system_message = messages[0]["content"]
-            messages = messages[1:]
-            messages[0]["content"] = system_message + "\n\n" + messages[0]["content"]
-
         print(
             provider.provider_name,
             "####",
             len(messages),
             "####",
-            _crop_content(messages[-1]["content"]),
+            crop_content(messages[-1]["content"]),
         )
-        casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
-        answer: Optional[str] = None
+        answer: Optional[MessageContent] = None
         for _ in range(num_retries):
             try:
-                chat_completion = await provider.api.chat.completions.create(
-                    model=provider.model_name, messages=casted_messages, **kwargs
-                )
-                assert chat_completion.choices, str(chat_completion)
-                assert chat_completion.choices[0].message.content, str(chat_completion)
-                assert isinstance(chat_completion.choices[0].message.content, str), str(chat_completion)
-                answer = chat_completion.choices[0].message.content
+                if use_agent:
+                    dalle_api_key = self.providers["gpt-4o-mini"].config.api_key
+                    answer = await run_agent(
+                        messages=messages,
+                        model=provider.get_openai_server_model(),
+                        dalle_api_key=dalle_api_key,
+                    )
+                else:
+                    answer_str = await provider(
+                        messages=messages,
+                        system_prompt=system_prompt,
+                        **kwargs,
+                    )
+                    answer = [{"type": "text", "text": answer_str}]
                 break
             except Exception:
                 traceback.print_exc()
                 continue
-        assert answer
-        if provider.merge_spaces:
-            answer = answer.replace("  ", " ")
+        assert answer is not None
         print(
             provider.provider_name,
             "####",
             len(messages),
             "####",
-            _crop_content(messages[-1]["content"]),
+            crop_content(messages[-1]["content"]),
             "####",
-            _crop_content(answer),
+            crop_content(answer[0]["text"] if isinstance(answer, list) else answer),
         )
         return answer
 
@@ -1202,17 +1017,7 @@ class LlmBot:
         if photo:
             image_file_stream: Optional[BinaryIO] = await self.bot.download_file(photo)
             assert image_file_stream
-            base64_image = base64.b64encode(image_file_stream.read()).decode("utf-8")
-            assert base64_image
-            content: List[Dict[str, Any]] = []
-            if message.caption:
-                content.append({"type": "text", "text": message.caption})
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                }
-            )
+            content = build_image_content(message.caption, image_file_stream)
             return content
 
         if text_document:
@@ -1257,33 +1062,6 @@ class LlmBot:
             chat_id=callback.message.chat.id, message_id=message_id, reply_markup=None
         )
 
-    def _count_tokens(self, messages: ChatMessages, provider: LLMProvider) -> int:
-        tokenizer_name = provider.tokenizer_name
-        if not tokenizer_name:
-            tokenizer_name = provider.model_name
-        url = str(provider.api.base_url)
-        tokens_count = 0
-
-        if "api.openai.com" in url:
-            encoding = tiktoken.encoding_for_model(tokenizer_name)
-            for m in messages:
-                if isinstance(m["content"], str):
-                    tokens_count += len(encoding.encode(m["content"]))
-                elif self._is_image_content(m["content"]):
-                    tokens_count += 2000
-            return tokens_count
-
-        if "anthropic" in url:
-            for m in messages:
-                if isinstance(m["content"], str):
-                    tokens_count += len(m["content"]) // 2
-            return tokens_count
-
-        tokenizer = Tokenizers.get(tokenizer_name)
-        tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-        tokens_count = len(tokens)
-        return tokens_count
-
     async def _is_admin(self, user_id: int, chat_id: int) -> bool:
         chat_member = await self.bot.get_chat_member(chat_id, user_id)
         return chat_member.status in [
@@ -1291,40 +1069,8 @@ class LlmBot:
             ChatMemberStatus.CREATOR,
         ]
 
-    @staticmethod
-    def _fix_broken_tool_calls(messages: ChatMessages) -> ChatMessages:
-        clean_messages: ChatMessages = []
-        is_expecting_tool_answer = False
-        for m in messages:
-            if is_expecting_tool_answer and "tool_call_id" not in m:
-                clean_messages = clean_messages[:-1]
-            is_expecting_tool_answer = "tool_calls" in m
-            clean_messages.append(m)
-        if is_expecting_tool_answer:
-            clean_messages = clean_messages[:-1]
-        return clean_messages
-
     def _get_user_name(self, user: User) -> str:
         return str(user.full_name) if user.full_name else str(user.username)
-
-    def _is_image_content(self, content: Any) -> bool:
-        return isinstance(content, list) and content[-1]["type"] == "image_url"
-
-    def _fix_image_roles(self, messages: ChatMessages) -> ChatMessages:
-        for m in messages:
-            if self._is_image_content(m["content"]):
-                m["role"] = "user"
-        return messages
-
-    def _replace_images(self, messages: ChatMessages) -> ChatMessages:
-        for m in messages:
-            if self._is_image_content(m["content"]):
-                texts = []
-                for item in m["content"]:
-                    if "text" in item:
-                        texts.append(item["text"])
-                m["content"] = IMAGE_PLACEHOLDER + "\n" + "\n".join(texts)
-        return messages
 
     def _truncate_text(self, text: str) -> str:
         if self.config.output_chunk_size and len(text) > self.config.output_chunk_size:
@@ -1338,17 +1084,15 @@ def main(
     db_path: str,
     localization_config_path: str,
     characters_path: Optional[str] = None,
-    tools_config_path: Optional[str] = None,
     yookassa_config_path: Optional[str] = None,
 ) -> None:
     bot = LlmBot(
-        bot_config_path=bot_config_path,
-        providers_config_path=providers_config_path,
-        db_path=db_path,
-        characters_path=characters_path,
-        tools_config_path=tools_config_path,
-        yookassa_config_path=yookassa_config_path,
-        localization_config_path=localization_config_path,
+        bot_config_path=Path(bot_config_path),
+        providers_config_path=Path(providers_config_path),
+        db_path=Path(db_path),
+        localization_config_path=Path(localization_config_path),
+        characters_path=Path(characters_path) if characters_path else None,
+        yookassa_config_path=(Path(yookassa_config_path) if yookassa_config_path else None),
     )
     asyncio.run(bot.start_polling())
 

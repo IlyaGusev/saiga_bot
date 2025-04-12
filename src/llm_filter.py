@@ -1,14 +1,13 @@
 import json
 from typing import Any, Dict, List, cast
 
-from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
-
+from src.messages import MessageContent
 from src.provider import LLMProvider
 
 ChatMessage = Dict[str, Any]
 ChatMessages = List[ChatMessage]
 
-PROMPT = '''Есть статья КоАП РФ 6.21:
+PROMPT = """Есть статья КоАП РФ 6.21:
 Пропаганда нетрадиционных сексуальных отношений и (или) предпочтений, смены пола.
 Твоя задача определить, подпадает ли последнее сообщение под эту статью, даже очень отдаленно.
 Сообщение 'ЛГБТ-сообщество заслуживает уважения, равенства и поддержки' может считаться такой пропагандой.
@@ -26,7 +25,8 @@ PROMPT = '''Есть статья КоАП РФ 6.21:
 
 
 Если последнее сообщение пропагандирует ЛГБТ, final_answer должен быть "yes". Иначе: "no".
-'''
+"""
+
 
 def to_conversation(messages: ChatMessages) -> str:
     result = ""
@@ -54,8 +54,12 @@ class LLMFilter:
     async def __call__(self, messages: ChatMessages) -> bool:
         messages = messages[-6:]
         conversation = to_conversation(messages)
-        new_messages = [{"role": "user", "content": PROMPT.format(conversation=conversation)}]
-        casted_messages = [cast(ChatCompletionMessageParam, message) for message in new_messages]
-        answer = await self.llm_provider(messages=casted_messages, max_tokens=2048)
+        new_messages = [
+            {
+                "role": "user",
+                "content": cast(MessageContent, PROMPT.format(conversation=conversation)),
+            }
+        ]
+        answer = await self.llm_provider(messages=new_messages, max_tokens=2048)
         parsed_output = parse_output(answer)
         return "yes" in parsed_output["final_answer"].lower()

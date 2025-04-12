@@ -7,7 +7,9 @@ from aiogram.types import (
 )
 
 
-def check_admin(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Coroutine[Any, Any, Any]]:
+def check_admin(
+    func: Callable[..., Coroutine[Any, Any, Any]],
+) -> Callable[..., Coroutine[Any, Any, Any]]:
     @wraps(func)
     async def wrapped(self: Any, obj: Union[CallbackQuery, Message], *args: Any, **kwargs: Any) -> Any:
         if isinstance(obj, CallbackQuery):
@@ -40,7 +42,9 @@ def check_admin(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., 
     return wrapped
 
 
-def check_creator(func: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., Coroutine[Any, Any, Any]]:
+def check_creator(
+    func: Callable[..., Coroutine[Any, Any, Any]],
+) -> Callable[..., Coroutine[Any, Any, Any]]:
     @wraps(func)
     async def wrapped(self: Any, obj: Union[CallbackQuery, Message], *args: Any, **kwargs: Any) -> Any:
         if isinstance(obj, CallbackQuery):

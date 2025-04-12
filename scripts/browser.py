@@ -18,7 +18,15 @@ def to_markdown(record):
 
 
 def to_meta(record):
-    meta = {k: v for k, v in record.items() if k in ("char_name", "source",)}
+    meta = {
+        k: v
+        for k, v in record.items()
+        if k
+        in (
+            "char_name",
+            "source",
+        )
+    }
     result = []
     for k, v in meta.items():
         result.append(f"{k}={v}")
@@ -43,13 +51,14 @@ class Browser(App):
             self.records = [json.loads(line) for line in r]
         yield Header()
         yield Static("", id="meta")
-        yield Container(
-            MarkdownViewer(),
-            Static("Loading...", id="loading"),
-            id="main-content"
-        )
+        yield Container(MarkdownViewer(), Static("Loading...", id="loading"), id="main-content")
         yield Static("", id="counter")
-        yield Input(placeholder="Enter index", validators=[Number()], restrict="[0-9]*", valid_empty=True)
+        yield Input(
+            placeholder="Enter index",
+            validators=[Number()],
+            restrict="[0-9]*",
+            valid_empty=True,
+        )
         yield Footer()
 
     @property
