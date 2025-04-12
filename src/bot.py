@@ -787,6 +787,7 @@ class LlmBot:
         is_chat = message.chat.type in ("group", "supergroup")
         chat_id = message.chat.id if is_chat else user_id
         model = self.db.get_current_model(chat_id)
+        conv_id = self.db.get_current_conv_id(chat_id)
 
         if model not in self.providers:
             await message.reply(self.localization.MODEL_NOT_SUPPORTED)
@@ -794,7 +795,7 @@ class LlmBot:
         provider = self.providers[model]
 
         remaining_count = self._count_remaining_messages(user_id=user_id, model=model)
-        print(user_id, model, remaining_count)
+        print(user_id, conv_id, model, remaining_count)
         if remaining_count <= 0:
             await message.reply(self.localization.LIMIT_EXCEEDED.format(model=model))
             return
@@ -804,7 +805,6 @@ class LlmBot:
             await message.reply(self.localization.FILE_IS_TOO_BIG)
             return
 
-        conv_id = self.db.get_current_conv_id(chat_id)
         history = self.db.fetch_conversation(conv_id)
         params = self.db.get_parameters(chat_id)
         params = provider.config.params if params is None else params
