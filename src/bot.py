@@ -955,6 +955,7 @@ class LlmBot:
                         messages=messages,
                         model=provider.get_openai_server_model(),
                         dalle_api_key=dalle_api_key,
+                        custom_system_prompt=system_prompt,
                     )
                 else:
                     answer_str = await provider(

@@ -25,8 +25,9 @@ async def run_agent(
     model: OpenAIServerModel,
     max_print_outputs_length: int = 10000,
     verbosity_level: int = 0,
-    max_steps: int = 5,
+    max_steps: int = 10,
     dalle_api_key: Optional[str] = None,
+    custom_system_prompt: Optional[str] = None,
 ) -> MessageContent:
     images = []
     for message in messages:
@@ -43,6 +44,9 @@ async def run_agent(
     tools = [WebSearchTool(), VisitWebpageTool()]
     if dalle_api_key:
         tools.append(DalleTool(api_key=dalle_api_key))
+    prompts = get_yaml_prompt("agent_prompt")
+    if custom_system_prompt:
+        prompts["system_prompt"] = custom_system_prompt + "\n\n" + prompts["system_prompt"]
     agent = CodeAgent(
         tools=tools,
         managed_agents=[],
@@ -51,7 +55,7 @@ async def run_agent(
         max_steps=max_steps,
         planning_interval=None,
         verbosity_level=verbosity_level,
-        prompt_templates=get_yaml_prompt("agent_prompt"),
+        prompt_templates=prompts,
         max_print_outputs_length=max_print_outputs_length,
     )
     query_prompt = get_jinja_prompt("agent_query_prompt")
