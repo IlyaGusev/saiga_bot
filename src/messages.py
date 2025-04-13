@@ -10,7 +10,11 @@ ChatMessages = List[ChatMessage]
 
 
 def is_image_content(content: MessageContent) -> bool:
-    return isinstance(content, list) and content[-1]["type"] == "image_url"
+    if isinstance(content, list):
+        for item in content:
+            if item["type"] == "image_url":
+                return True
+    return False
 
 
 def replace_images(messages: ChatMessages) -> ChatMessages:
