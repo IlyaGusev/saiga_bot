@@ -1,0 +1,7 @@
+Answer the last user message in the following conversation.
+Respond in the same language as the user messages.
+Images are represented as a placeholder.
+
+Conversation:
+{% for message in conversation %}
+{{ message.role }}: {{ message.content }}{% endfor %}
