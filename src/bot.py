@@ -947,7 +947,7 @@ class LlmBot:
             crop_content(messages[-1]["content"]),
         )
         answer: Optional[MessageContent] = None
-        for _ in range(num_retries):
+        for retry_num in range(num_retries):
             try:
                 if use_agent:
                     dalle_api_key = self.providers["gpt-4o-mini"].config.api_key
@@ -965,7 +965,9 @@ class LlmBot:
                     )
                     answer = [{"type": "text", "text": answer_str}]
                 break
-            except Exception:
+            except Exception as e:
+                if retry_num == num_retries - 1:
+                    raise e
                 traceback.print_exc()
                 continue
         assert answer is not None
