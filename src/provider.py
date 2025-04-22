@@ -51,9 +51,19 @@ class LLMProvider:
             **kwargs,
         )
         assert chat_completion.choices, str(chat_completion)
-        assert chat_completion.choices[0].message.content, str(chat_completion)
-        assert isinstance(chat_completion.choices[0].message.content, str), str(chat_completion)
-        response_message: str = chat_completion.choices[0].message.content
+        content = chat_completion.choices[0].message.content
+        reasoning = chat_completion.choices[0].message.reasoning
+        response_message: str = ""
+        if content and not reasoning:
+            assert isinstance(content, str), str(chat_completion)
+            response_message = content
+        elif reasoning and not content:
+            response_message = reasoning
+        else:
+            assert reasoning, str(chat_completion)
+            assert content, str(chat_completion)
+            response_message = f"Reasoning:\n{reasoning}\n\nAnswer:\n{content}"
+
         if self.config.merge_spaces:
             response_message = response_message.replace("  ", " ")
         return response_message
