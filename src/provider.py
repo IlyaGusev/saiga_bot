@@ -52,7 +52,7 @@ class LLMProvider:
         )
         assert chat_completion.choices, str(chat_completion)
         content = chat_completion.choices[0].message.content
-        reasoning = chat_completion.choices[0].message.reasoning
+        reasoning = getattr(chat_completion.choices[0].message, "reasoning", None)
         response_message: str = ""
         if content and not reasoning:
             assert isinstance(content, str), str(chat_completion)
