@@ -956,6 +956,7 @@ class LlmBot:
         for retry_num in range(num_retries):
             try:
                 if use_agent:
+                    assert self.tools_config, "Agentic mode is available only with tools config!"
                     answer = await run_agent(
                         messages=messages,
                         model=provider.get_openai_server_model(),
