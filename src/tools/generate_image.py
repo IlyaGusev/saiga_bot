@@ -18,6 +18,7 @@ class GenerateImageTool(Tool):  # type: ignore
     description = """
     When there is an explicit command to generate/draw an image,
     create a prompt that an image generator can use to generate the image.
+    Always provide the prompt only in English!
     The prompt sent to the generator should be very detailed, and around 30 words long.
     Only call this tool if the user explicitly asked to generate the image in the last message.
     Never call this tool when you are asked to analyze the image.
@@ -67,6 +68,7 @@ class GenerateImageTool(Tool):  # type: ignore
             quality=quality,  # type: ignore
             size=size,  # type: ignore
             background=background,  # type: ignore
+            moderation="low",
         )
         assert response.data, str(response)
         image_base64 = response.data[0].b64_json

@@ -43,7 +43,8 @@ async def run_agent(
         if message["content"][-1]["type"] != "image_url":
             continue
         base64_image = message["content"][-1]["image_url"]["url"].split(",")[-1]
-        message["content"] = message["content"][0]["text"]
+        if "text" in message["content"][0]:
+            message["content"] = message["content"][0]["text"]
 
         image_data = base64.b64decode(base64_image)
         image = Image.open(BytesIO(image_data))
