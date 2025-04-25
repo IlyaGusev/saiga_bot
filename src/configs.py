@@ -53,6 +53,12 @@ DEFAULT_PARAMS = {
 
 
 @dataclass
+class LimitConfig:
+    limit: int
+    interval: int
+
+
+@dataclass
 class ProviderConfig(DataClassJsonMixin):
     model_name: str
     base_url: str
@@ -87,3 +93,18 @@ class CharacterConfig(DataClassJsonMixin):
 @dataclass
 class CharactersConfig(DataClassJsonMixin):
     characters: Dict[str, CharacterConfig]
+
+
+@dataclass
+class ToolConfig(DataClassJsonMixin):
+    limits: Dict[str, LimitConfig]
+    kwargs: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        assert "standard" in self.limits
+        assert "subscribed" in self.limits
+
+
+@dataclass
+class ToolsConfig(DataClassJsonMixin):
+    tools: Dict[str, ToolConfig]

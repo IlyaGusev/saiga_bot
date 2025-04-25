@@ -5,3 +5,8 @@ Images are represented as a placeholder.
 Conversation:
 {% for message in conversation %}
 {{ message.role }}: {{ message.content }}{% endfor %}
+
+{% if image_paths %}Attached images:
+{% for image_path in image_paths %}
+{{image_path}}{% endfor %}{% endif %}
+

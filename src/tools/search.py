@@ -3,7 +3,10 @@ from typing import Any
 from duckduckgo_search import DDGS
 from smolagents import Tool  # type: ignore
 
+from src.decorators import log_tool_call
 
+
+@log_tool_call
 class WebSearchTool(Tool):  # type: ignore
     name = "web_search"
     description = """
@@ -13,8 +16,8 @@ class WebSearchTool(Tool):  # type: ignore
     inputs = {"query": {"type": "string", "description": "The search query to perform."}}
     output_type = "string"
 
-    def __init__(self, max_results: int = 10, **kwargs: Any) -> None:
-        super().__init__()
+    def __init__(self, *args: Any, max_results: int = 10, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self.max_results = max_results
         self.ddgs = DDGS(**kwargs)
 

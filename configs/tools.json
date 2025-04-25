@@ -1,0 +1,46 @@
+{
+    "tools": {
+        "web_search": {
+            "limits": {
+                "standard": {
+                    "limit": 10,
+                    "interval": 86400
+                },
+                "subscribed": {
+                    "limit": 100,
+                    "interval": 86400
+                }
+            }
+        },
+        "generate_image": {
+            "kwargs": {
+                "api_key": "..."
+            },
+            "limits": {
+                "standard": {
+                    "limit": 1,
+                    "interval": 86400
+                },
+                "subscribed": {
+                    "limit": 10,
+                    "interval": 86400
+                }
+            }
+        },
+        "edit_image": {
+            "kwargs": {
+                "api_key": "..."
+            },
+            "limits": {
+                "standard": {
+                    "limit": 1,
+                    "interval": 86400
+                },
+                "subscribed": {
+                    "limit": 10,
+                    "interval": 86400
+                }
+            }
+        }
+    }
+}

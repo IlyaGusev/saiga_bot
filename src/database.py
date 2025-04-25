@@ -40,6 +40,14 @@ class Message(Base):
     name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
+class ToolCall(Base):
+    __tablename__ = "tool_calls"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tool_name: Mapped[str]
+    timestamp: Mapped[int]
+    user_id: Mapped[Optional[int]]
+
+
 class Conversation(Base):
     __tablename__ = "current_conversations"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -404,6 +412,16 @@ class Database:
             session.add(new_message)
             session.commit()
 
+    def save_tool_call(
+        self,
+        tool_name: str,
+        user_id: int,
+    ) -> None:
+        with self.Session() as session:
+            tool_call = ToolCall(tool_name=tool_name, timestamp=self.get_current_ts(), user_id=user_id)
+            session.add(tool_call)
+            session.commit()
+
     def save_feedback(self, feedback: str, user_id: int, message_id: int) -> None:
         with self.Session() as session:
             new_feedback = Like(
@@ -426,6 +444,21 @@ class Database:
                     Message.model == model,
                     Message.timestamp.isnot(None),
                     Message.timestamp > (current_ts - interval),
+                )
+                .scalar()
+            )
+            return int(count)
+
+    def count_tool_calls(self, user_id: int, tool_name: str, interval: int) -> int:
+        with self.Session() as session:
+            current_ts = self.get_current_ts()
+            count = (
+                session.query(func.count(ToolCall.id))
+                .filter(
+                    ToolCall.user_id == user_id,
+                    ToolCall.tool_name == tool_name,
+                    ToolCall.timestamp.isnot(None),
+                    ToolCall.timestamp > (current_ts - interval),
                 )
                 .scalar()
             )

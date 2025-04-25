@@ -1,5 +1,5 @@
 aiogram==3.6.0
-openai== 1.72.0
+openai== 1.76.0
 sqlalchemy==2.0.15
 transformers==4.51.2
 smolagents==1.12.0

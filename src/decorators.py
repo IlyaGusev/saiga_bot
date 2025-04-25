@@ -1,10 +1,13 @@
-from typing import Callable, Coroutine, Any, Union
+from typing import Callable, Coroutine, Any, Union, Optional, TypeVar, Type, Dict
 from functools import wraps
 
 from aiogram.types import (
     Message,
     CallbackQuery,
 )
+from smolagents import Tool  # type: ignore
+
+from src.database import Database
 
 
 def check_admin(
@@ -73,3 +76,48 @@ def check_creator(
         return await func(self, obj, *args, **kwargs)
 
     return wrapped
+
+
+ToolClass = TypeVar("ToolClass", bound=Type[Tool])
+
+
+def log_tool_call(cls: ToolClass) -> ToolClass:
+    original_init = cls.__init__
+
+    @wraps(original_init)
+    def new_init(
+        self: Any,
+        *args: Any,
+        user_id: Optional[int] = None,
+        db: Optional[Database] = None,
+        limits: Optional[Dict[str, Dict[str, int]]] = None,
+        **kwargs: Any
+    ) -> None:
+        original_init(self, *args, **kwargs)
+
+        self.user_id = user_id
+        self.db = db
+        self.limits = limits
+
+        original_forward = self.forward
+
+        @wraps(original_forward)
+        def wrapped_forward(*args: Any, **kwargs: Any) -> Any:
+            if self.db is None:
+                return original_forward(*args, **kwargs)
+            if self.limits:
+                mode = "standard" if self.db.get_subscription_info(self.user_id) <= 0 else "subscribed"
+                limits = self.limits[mode]
+                limit, interval = limits.limit, limits.interval
+                count = self.db.count_tool_calls(user_id=self.user_id, tool_name=self.name, interval=interval)
+                remaining_count = limit - count
+                if remaining_count <= 0:
+                    return "This tool's quota for this user has been exhausted."
+            result = original_forward(*args, **kwargs)
+            self.db.save_tool_call(tool_name=self.name, user_id=self.user_id)
+            return result
+
+        self.forward = wrapped_forward
+
+    cls.__init__ = new_init
+    return cls

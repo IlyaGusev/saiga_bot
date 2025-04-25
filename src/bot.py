@@ -29,7 +29,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
-from src.configs import SubKey, BotConfig, ProvidersConfig, CharactersConfig
+from src.configs import SubKey, BotConfig, ProvidersConfig, CharactersConfig, ToolsConfig
 from src.provider import LLMProvider
 from src.agents import run_agent
 from src.llm_filter import LLMFilter
@@ -100,6 +100,7 @@ class LlmBot:
         localization_config_path: Path,
         characters_path: Optional[Path] = None,
         yookassa_config_path: Optional[Path] = None,
+        tools_config_path: Optional[Path] = None,
     ):
         assert bot_config_path.exists()
         assert providers_config_path.exists()
@@ -122,6 +123,9 @@ class LlmBot:
         self.characters = dict()
         if characters_path:
             self.characters = CharactersConfig.from_json(characters_path.read_text()).characters
+
+        if tools_config_path:
+            self.tools_config = ToolsConfig.from_json(tools_config_path.read_text())
 
         self.db = Database(str(db_path))
         self.dp = self.build_dispatcher()
@@ -833,11 +837,12 @@ class LlmBot:
 
         try:
             use_agent = self.db.are_tools_enabled(chat_id)
-            answer: MessageContent = await self._query_api(
+            answer: MessageContent = await self._generate(
                 provider=provider,
                 messages=history,
                 system_prompt=system_prompt,
                 use_agent=use_agent,
+                user_id=user_id,
                 **params,
             )
             assert isinstance(answer, list)
@@ -925,14 +930,15 @@ class LlmBot:
         history = merge_messages(history)
         if history[-1]["role"] == "assistant":
             history.pop()
-        answer = await self._query_api(provider=provider, messages=history, system_prompt=system_prompt, **params)
+        answer = await self._generate(provider=provider, messages=history, system_prompt=system_prompt, **params)
         answer_str = answer if isinstance(answer, str) else answer[0]["text"]
         await placeholder.edit_text(answer_str[: self.config.output_chunk_size])
 
-    async def _query_api(
+    async def _generate(
         self,
         provider: LLMProvider,
         messages: ChatMessages,
+        user_id: int,
         system_prompt: Optional[str] = None,
         num_retries: int = 2,
         use_agent: bool = False,
@@ -950,12 +956,13 @@ class LlmBot:
         for retry_num in range(num_retries):
             try:
                 if use_agent:
-                    dalle_api_key = self.providers["gpt-4o-mini"].config.api_key
                     answer = await run_agent(
                         messages=messages,
                         model=provider.get_openai_server_model(),
-                        dalle_api_key=dalle_api_key,
+                        tools_config=self.tools_config,
                         custom_system_prompt=system_prompt,
+                        db=self.db,
+                        user_id=user_id,
                     )
                 else:
                     answer_str = await provider(
@@ -1088,6 +1095,7 @@ def main(
     localization_config_path: str,
     characters_path: Optional[str] = None,
     yookassa_config_path: Optional[str] = None,
+    tools_config_path: Optional[str] = None,
 ) -> None:
     bot = LlmBot(
         bot_config_path=Path(bot_config_path),
@@ -1096,6 +1104,7 @@ def main(
         localization_config_path=Path(localization_config_path),
         characters_path=Path(characters_path) if characters_path else None,
         yookassa_config_path=(Path(yookassa_config_path) if yookassa_config_path else None),
+        tools_config_path=(Path(tools_config_path) if tools_config_path else None),
     )
     asyncio.run(bot.start_polling())
 
