@@ -112,7 +112,7 @@ def log_tool_call(cls: ToolClass) -> ToolClass:
                 count = self.db.count_tool_calls(user_id=self.user_id, tool_name=self.name, interval=interval)
                 remaining_count = limit - count
                 if remaining_count <= 0:
-                    return "This tool's quota for this user has been exhausted."
+                    return "Error: The tool's quota for this user has been exhausted."
             result = original_forward(*args, **kwargs)
             self.db.save_tool_call(tool_name=self.name, user_id=self.user_id)
             return result

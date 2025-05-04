@@ -2,7 +2,7 @@ aiogram==3.6.0
 openai== 1.76.0
 sqlalchemy==2.0.15
 transformers==4.51.2
-smolagents==1.12.0
+smolagents==1.14.0
 tiktoken==0.7.0
 yookassa==3.2.0
 apscheduler==3.6.3

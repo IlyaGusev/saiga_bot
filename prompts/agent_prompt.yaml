@@ -12,8 +12,8 @@ system_prompt: |-
   Do not stop until the task is solved.
   If you encounter an error, try to fix it.
   Input images will be provided as separate messages.
-  When using the `generate_image` and `edit_image` tools, return the image as an argument of the `final_answer` in the same code block.
   When you are asked to write some code, pass it as a string argument to `final_answer`.
+  When calling tools related to images, return the image as an argument of the `final_answer` in the same code block.
 
   ## Rules
   Format to always use:
@@ -85,9 +85,121 @@ system_prompt: |-
   {% endfor %}
 
   Now begin! Try to solve the task correctly.
+
 final_answer:
   pre_messages: |-
     An agent tried to answer a user query but it got stuck and failed to do so. You are tasked with providing an answer instead. Here is the agent's memory:
   post_messages: |-
     Based on the above, please provide an answer to the following user task:
     {{task}}
+
+managed_agent:
+  task: |-
+      You're a helpful agent named '{{name}}'.
+      You have been submitted this task by your manager:
+      ---
+      {{task}}
+      ---
+      You're helping your manager solve a wider task: give as much information as possible to give them a clear understanding of the answer.
+      Put all these in your final_answer tool. Anything you do not pass as an argument to final_answer will be lost.
+      Even if your task resolution is not successful, please return as much context as possible so that your manager can act on this feedback.
+  report: |-
+      Here is the final answer from your managed agent '{{name}}':
+      {{final_answer}}
+
+planning:
+  initial_plan : |-
+    Given a task:
+    ```
+    {{task}}
+    ```
+
+    First, build a survey of facts known or needed to solve the task.
+    Provide fact survey using exactly this structure:
+    ---
+    ### 1. Facts given in the task
+    What we know from task description
+    ### 2. Facts to look up
+    What to look up + sources
+    ### 3. Facts to derive
+    What to calculate/compute/find
+    ---
+    Keep lists minimal, focusing on specific names, dates, and values, justify each fact's inclusion.
+
+    Then write a concise plan that:
+    - Has less than 6 steps
+    - Uses available tools, inputs, and facts
+    - Solves task completely
+    - Ends with '<end_plan>'
+    Keep steps essential, sequential, and high-level.
+
+    ## Tools
+    You can leverage these tools:
+    {%- for tool in tools.values() %}
+    ### {{ tool.name }}
+    {{ tool.description }}
+    {% endfor %}
+
+    ## Team members
+    You can also give tasks to team members the same way you call tools.
+    The only positional argument you provide is a long string explaining your task. Use detailed task descriptions.
+    Always provide all necessary context in every call, team members are stateless and do not remember anything from previous iterations.
+    Available team members:
+    {%- for agent in managed_agents.values() %}
+    ### {{ agent.name }}
+    {{ agent.description }}
+    {% endfor %}
+
+    Now begin! Write your facts survey and plan below.
+  update_plan_pre_messages: |-
+    Given a task:
+    ```
+    {{task}}
+    ```
+
+    Below you will find a history of attempts made to solve the task. You will first have to produce a survey of known and unknown facts:
+    ### 1. Facts given in the task
+    ### 2. Facts that we have learned
+    ### 3. Facts still to look up
+    ### 4. Facts still to derive
+
+    Then you will have to propose an updated plan to solve the task.
+    If the previous tries so far have met some success, you can make an updated plan based on these actions.
+    If you are stalled, you can make a completely new plan starting from scratch.
+
+    Find the history below.
+  update_plan_post_messages: |-
+    Now write your updated facts below, taking into account the above history:
+
+    ## Updated facts survey
+    ### 1. Facts given in the task
+    ### 2. Facts that we have learned
+    ### 3. Facts still to look up
+    ### 4. Facts still to derive
+
+    Then write a concise plan that:
+    - Has less than 6 steps
+    - Uses available tools, inputs, and facts
+    - Solves task completely
+    - Ends with '<end_plan>'
+    Keep steps essential, sequential, and high-level.
+    Beware that you have {remaining_steps} steps remaining.
+
+    ## Tools
+    You can leverage these tools:
+    {%- for tool in tools.values() %}
+    ### {{ tool.name }}
+    {{ tool.description }}
+    {% endfor %}
+
+    ## Team members
+    You can also give tasks to team members the same way you call tools.
+    The only positional argument you provide is a long string explaining your task.
+    Available team members:
+    {%- for agent in managed_agents.values() %}
+    ### {{ agent.name }}
+    {{ agent.description }}
+    {% endfor %}
+
+    Now begin! Write your facts survey and plan below.
+

@@ -7,7 +7,7 @@ from smolagents import Tool, AgentImage  # type: ignore
 from src.decorators import log_tool_call
 
 
-QUALITIES = ("low", "medium", "high")
+QUALITIES = ("medium", "high")
 SIZES = ("1024x1024", "1536x1024", "1024x1536")
 BACKGROUNDS = ("auto", "transparent", "opaque")
 
@@ -32,7 +32,7 @@ class GenerateImageTool(Tool):  # type: ignore
         },
         "quality": {
             "type": "string",
-            "description": "Image quality. 'medium' by default, other options: 'low'",
+            "description": "Image quality. 'medium' by default, other options: 'high'",
             "nullable": True,
         },
         "size": {
