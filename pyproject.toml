@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "saiga_bot"
+version = "0.1.0"
+description = "Saiga bot"
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram==3.6.0",
+    "openai== 1.76.0",
+    "sqlalchemy==2.0.15",
+    "transformers==4.51.2",
+    "smolagents==1.14.0",
+    "tiktoken==0.7.0",
+    "yookassa==3.2.0",
+    "apscheduler==3.6.3",
+    "pillow>=11.1.0",
+    "types-requests==2.32.0.20250328",
+    "types-pyyaml==6.0.12.20250402",
+    "dataclasses-json>=0.6.7",
+    "fire>=0.5.0",
+    "pytest-asyncio>=0.26.0",
+    "pypdf==5.1.0",
+    "anthropic>=0.52.0",
+    "mypy>=1.15.0",
+    "black>=25.1.0",
+    "flake8>=7.2.0",
+]
+
+[tool.flake8]
+exclude = ["*/__init__.py", ".venv"]
+ignore = "E203,F403,E501,SIM115,PIE786,W503"
+max-line-length = 120

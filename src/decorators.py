@@ -91,7 +91,7 @@ def log_tool_call(cls: ToolClass) -> ToolClass:
         user_id: Optional[int] = None,
         db: Optional[Database] = None,
         limits: Optional[Dict[str, Dict[str, int]]] = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> None:
         original_init(self, *args, **kwargs)
 

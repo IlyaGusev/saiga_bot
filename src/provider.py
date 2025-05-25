@@ -7,7 +7,13 @@ from openai.types.chat.chat_completion_message_param import ChatCompletionMessag
 from smolagents.models import OpenAIServerModel  # type: ignore
 
 from src.configs import ProviderConfig
-from src.messages import IMAGE_PLACEHOLDER, ChatMessages, format_chat, is_image_content, merge_messages
+from src.messages import (
+    IMAGE_PLACEHOLDER,
+    ChatMessages,
+    format_chat,
+    is_image_content,
+    merge_messages,
+)
 from src.tokenizers import Tokenizers
 
 

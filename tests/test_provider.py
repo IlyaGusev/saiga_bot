@@ -18,7 +18,10 @@ async def test_provider_base(llm_gpt_4o_mini_provider: LLMProvider) -> None:
 async def test_provider_with_system_prompt(llm_gpt_4o_mini_provider: LLMProvider) -> None:
     messages = cast(
         ChatMessages,
-        [{"role": "system", "content": "Always respond with 'Hello, world!'"}, {"role": "user", "content": "Hi!"}],
+        [
+            {"role": "system", "content": "Always respond with 'Hello, world!'"},
+            {"role": "user", "content": "Hi!"},
+        ],
     )
     response = await llm_gpt_4o_mini_provider(messages)
     assert response

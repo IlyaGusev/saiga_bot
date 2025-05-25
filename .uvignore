@@ -1,0 +1,5 @@
+.pytest_cache/
+.git/
+.github/
+.mypy_cache/
+.cursor/

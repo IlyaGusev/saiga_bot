@@ -8,10 +8,12 @@ from src.configs import ToolsConfig
 
 
 @pytest.mark.asyncio
-async def test_agent_run(llm_gpt_4o_mini_provider: LLMProvider) -> None:
+async def test_agent_run(llm_gpt_4o_mini_provider: LLMProvider, tools_config: ToolsConfig) -> None:
     messages = cast(ChatMessages, [{"role": "user", "content": "What is a price of NVIDIA stock?"}])
     response = await run_agent(
-        messages, llm_gpt_4o_mini_provider.get_openai_server_model(), tools_config=ToolsConfig(tools={})
+        messages,
+        llm_gpt_4o_mini_provider.get_openai_server_model(),
+        tools_config=tools_config,
     )
     assert response
     assert isinstance(response, list)

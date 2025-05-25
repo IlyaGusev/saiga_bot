@@ -56,7 +56,11 @@ class GenerateImageTool(Tool):  # type: ignore
         )
 
     def forward(
-        self, prompt: str, quality: str = "medium", size: str = "1024x1024", background: str = "auto"
+        self,
+        prompt: str,
+        quality: str = "medium",
+        size: str = "1024x1024",
+        background: str = "auto",
     ) -> AgentImage:
         assert quality in QUALITIES, f"Wrong quality: {quality}! Options: {QUALITIES}"
         assert size in SIZES, f"Wrong size: {size}! Options: {SIZES}"
