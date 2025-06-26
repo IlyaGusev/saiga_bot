@@ -26,16 +26,22 @@ git clone https://github.com/IlyaGusev/saiga_bot
 cd saiga_bot
 ```
 
-3. Install the required dependencies (you may need to create a virtual environment first):
+3. Install the required dependencies:
 ```
-pip3 install -r requirements.txt
+uv venv
+make install
 ```
 
 4. Add a token from [@BotFather](https://t.me/botfather) and an admin's user name and ID to [configs/bot.json](https://github.com/IlyaGusev/saiga_bot/blob/master/configs/bot.json).
 5. Add URLs and tokens to [configs/providers.json](https://github.com/IlyaGusev/saiga_bot/blob/master/configs/providers.json). Modify all other configs if needed.
-6. Run the bot with [run.sh](https://github.com/IlyaGusev/saiga_bot/blob/master/run.sh):
+6. Run the bot with `make serve`
 ```
-./run.sh configs/bot.json db.sqlite
+make serve
+```
+
+Or with an explicit command:
+```
+uv run python -m src.bot --bot-config-path configs/bot_prod.json --providers-config-path configs/providers.json --db-path db.sqlite --characters-path configs/characters.json --yookassa-config-path configs/yookassa.json --localization-config-path configs/localization.json --tools-config-path configs/tools_prod.json
 ```
 
 ## Contact
