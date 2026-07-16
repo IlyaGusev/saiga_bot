@@ -17,7 +17,7 @@ test:
 	uv run pytest -s
 
 serve:
-	uv run python -m src.bot --bot-config-path configs/bot_prod.json --providers-config-path configs/providers.json --db-path db.sqlite --characters-path configs/characters.json --yookassa-config-path configs/yookassa.json --localization-config-path configs/localization.json --tools-config-path configs/tools_prod.json
+	uv run python -m src.bot --bot-config-path configs/bot_prod.json --providers-config-path configs/providers.json --db-path db.sqlite --characters-path configs/characters.json --yookassa-config-path configs/yookassa.json --localization-config-path configs/localization.json
 
 serve-test:
-	uv run python -m src.bot --bot-config-path configs/bot_test.json --providers-config-path configs/providers.json --db-path test_db.sqlite --characters-path configs/characters.json --yookassa-config-path configs/yookassa.json --localization-config-path configs/localization.json --tools-config-path configs/tools.json
+	uv run python -m src.bot --bot-config-path configs/bot_test.json --providers-config-path configs/providers.json --db-path test_db.sqlite --characters-path configs/characters.json --yookassa-config-path configs/yookassa.json --localization-config-path configs/localization.json

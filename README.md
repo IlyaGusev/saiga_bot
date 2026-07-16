@@ -9,8 +9,6 @@ This is a Telegram bot designed to interact with various language models. It off
 - Integration with the Telegram platform
 - Support for any number of language models (compatible with OpenAI API format)
 - Ability to handle system prompts, generation parameters, and characters
-- Image processing and generation (with gpt-image-1)
-- Function calling with CodeAct (from [smolagents](https://github.com/huggingface/smolagents))
 
 ## Installation
 
@@ -41,7 +39,7 @@ make serve
 
 Or with an explicit command:
 ```
-uv run python -m src.bot --bot-config-path configs/bot_prod.json --providers-config-path configs/providers.json --db-path db.sqlite --characters-path configs/characters.json --yookassa-config-path configs/yookassa.json --localization-config-path configs/localization.json --tools-config-path configs/tools_prod.json
+uv run python -m src.bot --bot-config-path configs/bot_prod.json --providers-config-path configs/providers.json --db-path db.sqlite --characters-path configs/characters.json --yookassa-config-path configs/yookassa.json --localization-config-path configs/localization.json
 ```
 
 ## Contact

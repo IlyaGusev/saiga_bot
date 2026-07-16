@@ -13,7 +13,8 @@ TEMPLATES_DIR_PATH = ROOT_DIR_PATH / "templates"
 def get_template(template_name: str) -> Template:
     template_path = TEMPLATES_DIR_PATH / f"{template_name}.jinja"
     with open(template_path) as f:
-        return Template(f.read())
+        template: Template = Template(f.read())
+    return template
 
 
 @dataclass
@@ -57,16 +58,12 @@ class Localization:
     SELECT_TOP_P: str
     SELECT_FREQUENCY_PENALTY: str
     CURRENT_PARAMS: str
-    TOOLS_NOT_SUPPORTED_BY_MODEL: str
-    ENABLED_TOOLS: str
-    DISABLED_TOOLS: str
     INCORRECT_EMAIL: str
     FILLED_EMAIL: str
     ADMINS_ONLY: str
     CREATORS_ONLY: str
     PAYMENT_URL: str
     PAYMENT_CANCEL: str
-    DALLE_ANSWER: str
     BUY_WEEK_WITH_STARS: str
     BUY_WEEK_WITH_RUB: str
     BUY_MONTH_WITH_STARS: str
