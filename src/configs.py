@@ -53,18 +53,11 @@ DEFAULT_PARAMS = {
 
 
 @dataclass
-class LimitConfig:
-    limit: int
-    interval: int
-
-
-@dataclass
 class ProviderConfig(DataClassJsonMixin):
     model_name: str
     base_url: str
     api_key: str
     can_handle_images: bool = False
-    can_handle_tools: bool = False
     system_prompt: str = ""
     history_max_tokens: int = DEFAULT_HISTORY_MAX_TOKENS
     params: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_PARAMS))
@@ -93,18 +86,3 @@ class CharacterConfig(DataClassJsonMixin):
 @dataclass
 class CharactersConfig(DataClassJsonMixin):
     characters: Dict[str, CharacterConfig]
-
-
-@dataclass
-class ToolConfig(DataClassJsonMixin):
-    limits: Dict[str, LimitConfig]
-    kwargs: Dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        assert "standard" in self.limits
-        assert "subscribed" in self.limits
-
-
-@dataclass
-class ToolsConfig(DataClassJsonMixin):
-    tools: Dict[str, ToolConfig]

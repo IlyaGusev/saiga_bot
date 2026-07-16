@@ -1,10 +1,8 @@
-import copy
-from typing import Dict, Any, cast, Optional
+from typing import Any, cast, Optional
 
 import tiktoken
 from openai import AsyncOpenAI
 from openai.types.chat.chat_completion_message_param import ChatCompletionMessageParam
-from smolagents.models import OpenAIServerModel  # type: ignore
 
 from src.configs import ProviderConfig
 from src.messages import (
@@ -74,21 +72,8 @@ class LLMProvider:
             response_message = response_message.replace("  ", " ")
         return response_message
 
-    def get_openai_server_model(self) -> OpenAIServerModel:
-        model_params: Dict[str, Any] = copy.deepcopy(self.config.params)
-        model_params["max_tokens"] = 8192
-        return OpenAIServerModel(
-            model_id=self.config.model_name,
-            api_key=self.config.api_key,
-            api_base=self.config.base_url,
-            **model_params,
-        )
-
     def can_handle_images(self) -> bool:
         return self.config.can_handle_images
-
-    def can_handle_tools(self) -> bool:
-        return self.config.can_handle_tools
 
     def count_tokens(self, messages: ChatMessages) -> int:
         tokenizer_name = self.config.tokenizer_name

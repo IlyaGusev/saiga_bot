@@ -57,16 +57,12 @@ class Localization:
     SELECT_TOP_P: str
     SELECT_FREQUENCY_PENALTY: str
     CURRENT_PARAMS: str
-    TOOLS_NOT_SUPPORTED_BY_MODEL: str
-    ENABLED_TOOLS: str
-    DISABLED_TOOLS: str
     INCORRECT_EMAIL: str
     FILLED_EMAIL: str
     ADMINS_ONLY: str
     CREATORS_ONLY: str
     PAYMENT_URL: str
     PAYMENT_CANCEL: str
-    DALLE_ANSWER: str
     BUY_WEEK_WITH_STARS: str
     BUY_WEEK_WITH_RUB: str
     BUY_MONTH_WITH_STARS: str

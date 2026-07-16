@@ -4,7 +4,6 @@ import re
 import json
 import copy
 import traceback
-import base64
 from pathlib import Path
 from email.utils import parseaddr
 from typing import List, Dict, Any, Optional, Union, Callable, Tuple, BinaryIO
@@ -23,15 +22,13 @@ from aiogram.types import (
     PreCheckoutQuery,
     LabeledPrice,
     SuccessfulPayment,
-    BufferedInputFile,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
-from src.configs import SubKey, BotConfig, ProvidersConfig, CharactersConfig, ToolsConfig
+from src.configs import SubKey, BotConfig, ProvidersConfig, CharactersConfig
 from src.provider import LLMProvider
-from src.agents import run_agent
 from src.llm_filter import LLMFilter
 from src.decorators import check_admin, check_creator
 from src.localization import Localization
@@ -100,7 +97,6 @@ class LlmBot:
         localization_config_path: Path,
         characters_path: Optional[Path] = None,
         yookassa_config_path: Optional[Path] = None,
-        tools_config_path: Optional[Path] = None,
     ):
         assert bot_config_path.exists()
         assert providers_config_path.exists()
@@ -123,9 +119,6 @@ class LlmBot:
         self.characters = dict()
         if characters_path:
             self.characters = CharactersConfig.from_json(characters_path.read_text()).characters
-
-        if tools_config_path:
-            self.tools_config = ToolsConfig.from_json(tools_config_path.read_text())
 
         self.db = Database(str(db_path))
         self.dp = self.build_dispatcher()
@@ -217,7 +210,6 @@ class LlmBot:
             ("setemail", self.set_email),
             ("subinfo", self.sub_info),
             ("subbuy", self.sub_buy),
-            ("tools", self.toogle_tools),
             ("history", self.history),
             ("debug", self.debug),
             ("privacy", self.privacy),
@@ -738,26 +730,6 @@ class LlmBot:
         await message.reply(self.localization.CURRENT_PARAMS.format(params=params_str))
 
     #
-    # Tools
-    #
-
-    @check_admin
-    async def toogle_tools(self, message: Message) -> None:
-        chat_id = message.chat.id
-        model = self.db.get_current_model(chat_id)
-        provider = self.providers[model]
-        if not provider.can_handle_tools():
-            await message.reply(self.localization.TOOLS_NOT_SUPPORTED_BY_MODEL.format(model=model))
-            return
-        current_value = self.db.are_tools_enabled(chat_id)
-        self.db.set_enable_tools(chat_id, not current_value)
-        self.db.create_conv_id(chat_id)
-        if not current_value:
-            await message.reply(self.localization.ENABLED_TOOLS)
-        else:
-            await message.reply(self.localization.DISABLED_TOOLS)
-
-    #
     # Text generation
     #
 
@@ -836,13 +808,10 @@ class LlmBot:
         placeholder = await message.reply("💬")
 
         try:
-            use_agent = self.db.are_tools_enabled(chat_id)
             answer: MessageContent = await self._generate(
                 provider=provider,
                 messages=history,
                 system_prompt=system_prompt,
-                use_agent=use_agent,
-                user_id=user_id,
                 **params,
             )
             assert isinstance(answer, list)
@@ -852,26 +821,6 @@ class LlmBot:
                 filter_result = await self.llm_filter(all_messages)
                 if filter_result:
                     answer = self.localization.MESSAGE_FILTERED
-
-            if isinstance(answer, list) and len(answer) > 1:
-                await placeholder.edit_text(self.localization.DALLE_ANSWER)
-                image_url = answer[1]["image_url"]
-                base64_image = image_url["url"].split(",")[-1]
-                image_data = base64.b64decode(base64_image)
-                input_file = BufferedInputFile(image_data, filename="image.jpeg")
-                photo_message = await self.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=input_file,
-                    reply_to_message_id=placeholder.message_id,
-                )
-                self.db.save_assistant_message(
-                    content=answer,
-                    conv_id=conv_id,
-                    message_id=photo_message.message_id,
-                    model="dalle",
-                    reply_user_id=user_id,
-                )
-                return
 
             answer_str: Optional[str] = None
             if isinstance(answer, list) and len(answer) == 1 and answer[0]["type"] == "text":
@@ -938,10 +887,8 @@ class LlmBot:
         self,
         provider: LLMProvider,
         messages: ChatMessages,
-        user_id: int,
         system_prompt: Optional[str] = None,
         num_retries: int = 2,
-        use_agent: bool = False,
         **kwargs: Any,
     ) -> MessageContent:
         assert messages
@@ -955,23 +902,12 @@ class LlmBot:
         answer: Optional[MessageContent] = None
         for retry_num in range(num_retries):
             try:
-                if use_agent:
-                    assert self.tools_config, "Agentic mode is available only with tools config!"
-                    answer = await run_agent(
-                        messages=messages,
-                        model=provider.get_openai_server_model(),
-                        tools_config=self.tools_config,
-                        custom_system_prompt=system_prompt,
-                        db=self.db,
-                        user_id=user_id,
-                    )
-                else:
-                    answer_str = await provider(
-                        messages=messages,
-                        system_prompt=system_prompt,
-                        **kwargs,
-                    )
-                    answer = [{"type": "text", "text": answer_str}]
+                answer_str = await provider(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    **kwargs,
+                )
+                answer = [{"type": "text", "text": answer_str}]
                 break
             except Exception as e:
                 if retry_num == num_retries - 1:
@@ -1096,7 +1032,6 @@ def main(
     localization_config_path: str,
     characters_path: Optional[str] = None,
     yookassa_config_path: Optional[str] = None,
-    tools_config_path: Optional[str] = None,
 ) -> None:
     bot = LlmBot(
         bot_config_path=Path(bot_config_path),
@@ -1105,7 +1040,6 @@ def main(
         localization_config_path=Path(localization_config_path),
         characters_path=Path(characters_path) if characters_path else None,
         yookassa_config_path=(Path(yookassa_config_path) if yookassa_config_path else None),
-        tools_config_path=(Path(tools_config_path) if tools_config_path else None),
     )
     asyncio.run(bot.start_polling())
 
