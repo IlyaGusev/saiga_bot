@@ -37,7 +37,6 @@ from src.payments import YookassaHandler, YookassaStatus
 from src.document_loader import DocumentLoader
 from src.messages import (
     ChatMessages,
-    MessageContent,
     replace_images,
     merge_messages,
     crop_content,
@@ -808,13 +807,12 @@ class LlmBot:
         placeholder = await message.reply("💬")
 
         try:
-            answer: MessageContent = await self._generate(
+            answer: str = await self._generate(
                 provider=provider,
                 messages=history,
                 system_prompt=system_prompt,
                 **params,
             )
-            assert isinstance(answer, list)
 
             if is_chat and self.llm_filter:
                 all_messages = history + [{"role": "assistant", "content": answer}]
@@ -822,16 +820,12 @@ class LlmBot:
                 if filter_result:
                     answer = self.localization.MESSAGE_FILTERED
 
-            answer_str: Optional[str] = None
-            if isinstance(answer, list) and len(answer) == 1 and answer[0]["type"] == "text":
-                answer_str = answer[0]["text"]
-
-            if answer_str:
+            if answer:
                 output_chunk_size = self.config.output_chunk_size
                 if output_chunk_size is not None:
-                    answer_parts = _split_message(answer_str, output_chunk_size=output_chunk_size)
+                    answer_parts = _split_message(answer, output_chunk_size=output_chunk_size)
                 else:
-                    answer_parts = [answer_str]
+                    answer_parts = [answer]
 
                 new_message: Union[Message, bool] = await _edit_text(placeholder, answer_parts[0])
                 assert isinstance(new_message, Message)
@@ -880,8 +874,7 @@ class LlmBot:
         if history[-1]["role"] == "assistant":
             history.pop()
         answer = await self._generate(provider=provider, messages=history, system_prompt=system_prompt, **params)
-        answer_str = answer if isinstance(answer, str) else answer[0]["text"]
-        await placeholder.edit_text(answer_str[: self.config.output_chunk_size])
+        await placeholder.edit_text(answer[: self.config.output_chunk_size])
 
     async def _generate(
         self,
@@ -890,7 +883,7 @@ class LlmBot:
         system_prompt: Optional[str] = None,
         num_retries: int = 2,
         **kwargs: Any,
-    ) -> MessageContent:
+    ) -> str:
         assert messages
         print(
             provider.provider_name,
@@ -899,15 +892,14 @@ class LlmBot:
             "####",
             crop_content(messages[-1]["content"]),
         )
-        answer: Optional[MessageContent] = None
+        answer: Optional[str] = None
         for retry_num in range(num_retries):
             try:
-                answer_str = await provider(
+                answer = await provider(
                     messages=messages,
                     system_prompt=system_prompt,
                     **kwargs,
                 )
-                answer = [{"type": "text", "text": answer_str}]
                 break
             except Exception as e:
                 if retry_num == num_retries - 1:
@@ -922,7 +914,7 @@ class LlmBot:
             "####",
             crop_content(messages[-1]["content"]),
             "####",
-            crop_content(answer[0]["text"] if isinstance(answer, list) else answer),
+            crop_content(answer),
         )
         return answer
 

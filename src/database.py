@@ -416,22 +416,6 @@ class Database:
             )
             return int(count)
 
-    def count_generated_images(self, user_id: int, interval: int) -> int:
-        with self.Session() as session:
-            current_ts = self.get_current_ts()
-            count = (
-                session.query(func.count(Message.id))
-                .filter(
-                    Message.reply_user_id == user_id,
-                    Message.role == "assistant",
-                    Message.model == "dalle",
-                    Message.timestamp.isnot(None),
-                    Message.timestamp > (current_ts - interval),
-                )
-                .scalar()
-            )
-            return int(count)
-
     def is_subscribed_user(self, user_id: int) -> bool:
         remaining_time = self.get_subscription_info(user_id)
         return remaining_time > 0
