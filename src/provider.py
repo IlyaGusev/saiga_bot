@@ -24,7 +24,11 @@ class LLMProvider:
         self.config = config
         self.provider_name = provider_name
 
-        self.api = AsyncOpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
+        self.api = AsyncOpenAI(
+            base_url=self.config.base_url,
+            api_key=self.config.api_key,
+            max_retries=3,
+        )
 
     async def __call__(
         self,
@@ -47,13 +51,21 @@ class LLMProvider:
             else:
                 messages[0]["content"].insert(0, {"type": "text", "text": system_message})
 
-        casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
-        chat_completion = await self.api.chat.completions.create(
-            *args,
-            messages=casted_messages,
-            model=self.config.model_name,
-            **kwargs,
-        )
+        for _ in range(3):
+            casted_messages = [cast(ChatCompletionMessageParam, message) for message in messages]
+            chat_completion = await self.api.chat.completions.create(
+                *args,
+                messages=casted_messages,
+                model=self.config.model_name,
+                **kwargs,
+            )
+            if chat_completion.choices:
+                break
+            error_message = getattr(chat_completion, "message", "")
+            if "maximum context length" in str(error_message) and len(messages) >= 3:
+                messages = messages[2:] if messages[0]["role"] != "system" else [messages[0]] + messages[3:]
+                continue
+            assert False, str(chat_completion)
         assert chat_completion.choices, str(chat_completion)
         content = chat_completion.choices[0].message.content
         reasoning = getattr(chat_completion.choices[0].message, "reasoning", None)
@@ -82,18 +94,18 @@ class LLMProvider:
         url = str(self.config.base_url)
         tokens_count = 0
 
-        if "api.openai.com" in url:
+        if "api.openai.com" in url or "gpt-4o" in tokenizer_name:
             encoding = tiktoken.encoding_for_model(tokenizer_name)
             for m in messages:
                 if isinstance(m["content"], str):
-                    tokens_count += len(encoding.encode(m["content"]))
+                    tokens_count += len(encoding.encode(m["content"])) * 3
                 elif is_image_content(m["content"]):
-                    tokens_count += 2000
+                    tokens_count += 10000
                 else:
-                    tokens_count += len(encoding.encode(m["content"][0]["text"]))
+                    tokens_count += len(encoding.encode(m["content"][0]["text"])) * 3
             return tokens_count
 
-        if "anthropic" in url:
+        if "anthropic" in url or "claude" in tokenizer_name:
             for m in messages:
                 if isinstance(m["content"], str):
                     tokens_count += len(m["content"]) // 2
@@ -105,7 +117,7 @@ class LLMProvider:
                 fixed_messages.append(m)
             elif is_image_content(m["content"]):
                 fixed_messages.append({"role": m["role"], "content": IMAGE_PLACEHOLDER})
-                tokens_count += 2000
+                tokens_count += 10000
             else:
                 fixed_messages.append({"role": m["role"], "content": m["content"][0]["text"]})
 
@@ -136,7 +148,7 @@ class LLMProvider:
 
         last_message = history[-1]["content"]
         if tokens_count > max_tokens and isinstance(last_message, str):
-            estimated_char_count = max_tokens * 2
+            estimated_char_count = max_tokens * 4
             if len(last_message) > estimated_char_count:
                 history[-1]["content"] = "<truncated text>\n\n" + last_message[-estimated_char_count:]
         assert history

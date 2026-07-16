@@ -9,7 +9,6 @@ description = "Saiga bot"
 requires-python = ">=3.11"
 dependencies = [
     "aiogram==3.6.0",
-    "openai== 1.76.0",
     "sqlalchemy==2.0.15",
     "transformers==4.51.2",
     "tiktoken==0.7.0",
@@ -24,6 +23,7 @@ dependencies = [
     "mypy>=1.15.0",
     "black>=25.1.0",
     "flake8>=7.2.0",
+    "openai==1.89.0",
 ]
 
 [tool.flake8]

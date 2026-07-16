@@ -24,7 +24,7 @@ from aiogram.types import (
     SuccessfulPayment,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 
 from src.configs import SubKey, BotConfig, ProvidersConfig, CharactersConfig
@@ -111,8 +111,8 @@ class LlmBot:
         for provider_name, config in providers_config.providers.items():
             self.providers[provider_name] = LLMProvider(provider_name=provider_name, config=config)
 
-        assert "gpt-4o-mini" in self.providers
-        self.llm_filter = LLMFilter(self.providers["gpt-4o-mini"])
+        assert "gpt-5-mini" in self.providers
+        self.llm_filter = LLMFilter(self.providers["gpt-5-mini"])
 
         self.localization = Localization.load(localization_config_path, "ru")
         self.characters = dict()
@@ -315,7 +315,11 @@ class LlmBot:
         assert message.from_user
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
-        content = await self._build_content(message)
+        try:
+            content = await self._build_content(message)
+        except TelegramNetworkError:
+            traceback.print_exc()
+            return
         if content is not None:
             conv_id = self.db.get_current_conv_id(chat_id)
             self.db.save_user_message(content, conv_id=conv_id, user_id=user_id, user_name=user_name)
