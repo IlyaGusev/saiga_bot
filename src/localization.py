@@ -13,7 +13,8 @@ TEMPLATES_DIR_PATH = ROOT_DIR_PATH / "templates"
 def get_template(template_name: str) -> Template:
     template_path = TEMPLATES_DIR_PATH / f"{template_name}.jinja"
     with open(template_path) as f:
-        return Template(f.read())
+        template: Template = Template(f.read())
+    return template
 
 
 @dataclass
