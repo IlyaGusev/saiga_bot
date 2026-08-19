@@ -316,7 +316,7 @@ class LlmBot:
         user_id = message.from_user.id
         user_name = self._get_user_name(message.from_user)
         try:
-            content = await self._build_content(message)
+            content = await self._build_content_with_retry(message)
         except TelegramNetworkError:
             traceback.print_exc()
             return
@@ -789,7 +789,13 @@ class LlmBot:
         params = provider.config.params if params is None else params
         params = copy.deepcopy(params)
         system_prompt = self.db.get_system_prompt(chat_id)
-        content = await self._build_content(message)
+        try:
+            content = await self._build_content_with_retry(message)
+        except TelegramNetworkError:
+            traceback.print_exc()
+            text = self.localization.ERROR.format(admin_username=self.config.admin_user_name, conv_id=conv_id)
+            await message.reply(text)
+            return
 
         if "claude" in model and params["temperature"] > 1.0:
             await message.reply(self.localization.CLAUDE_HIGH_TEMPERATURE)
@@ -808,7 +814,11 @@ class LlmBot:
         history = history + [{"role": "user", "content": content, "user_name": user_name}]
         history = provider.prepare_history(history, is_chat)
 
-        placeholder = await message.reply("💬")
+        try:
+            placeholder = await message.reply("💬")
+        except TelegramNetworkError:
+            traceback.print_exc()
+            return
 
         try:
             answer: str = await self._generate(
@@ -921,6 +931,12 @@ class LlmBot:
             crop_content(answer),
         )
         return answer
+
+    async def _build_content_with_retry(self, message: Message) -> Union[None, str, List[Dict[str, Any]]]:
+        try:
+            return await self._build_content(message)
+        except TelegramNetworkError:
+            return await self._build_content(message)
 
     async def _build_content(self, message: Message) -> Union[None, str, List[Dict[str, Any]]]:
         content_type = message.content_type
